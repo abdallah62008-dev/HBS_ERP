@@ -1,93 +1,408 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
-import { Head, usePage } from '@inertiajs/react';
+import StatusBadge from '@/Components/StatusBadge';
+import useCan from '@/Hooks/useCan';
+import { Head, Link, usePage } from '@inertiajs/react';
 
 /**
- * Phase 1 dashboard.
+ * Admin operational dashboard.
  *
- * Real metrics (orders, revenue, low stock, etc.) come online in Phase 2+.
- * For now we show an at-a-glance summary of what the foundation seeded so
- * the operator can verify the install is healthy.
+ * Marketer users are redirected server-side (DashboardController) to
+ * /marketer/dashboard so they never reach this view.
  */
-function StatCard({ label, value, hint }) {
+
+/* ────────────────────── Building blocks ────────────────────── */
+
+function KpiCard({ label, value, hint, deltaText, deltaTone, accent }) {
+    const accentColors = {
+        slate: 'border-slate-200',
+        emerald: 'border-emerald-200',
+        amber: 'border-amber-200',
+        red: 'border-red-200',
+        indigo: 'border-indigo-200',
+    };
+    const toneColors = {
+        up: 'text-emerald-600',
+        down: 'text-red-600',
+        flat: 'text-slate-400',
+    };
     return (
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                {label}
+        <div className={'rounded-lg border bg-white p-4 shadow-sm ' + (accentColors[accent] ?? accentColors.slate)}>
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</div>
+            <div className="mt-1.5 text-2xl font-semibold tabular-nums text-slate-900">{value}</div>
+            <div className="mt-1 flex items-center gap-2 text-[11px]">
+                {deltaText && (
+                    <span className={toneColors[deltaTone] ?? toneColors.flat}>{deltaText}</span>
+                )}
+                {hint && <span className="text-slate-400">{hint}</span>}
             </div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
-            {hint && <div className="mt-1 text-xs text-slate-400">{hint}</div>}
         </div>
     );
 }
 
-function PlaceholderCard({ title, items }) {
+function deltaParts(curr, prev) {
+    if (prev === 0 && curr === 0) return { text: 'no change vs yesterday', tone: 'flat' };
+    if (prev === 0 && curr > 0) return { text: '↑ new today (none yesterday)', tone: 'up' };
+    if (prev > 0 && curr === 0) return { text: '↓ none today (was ' + prev + ' yesterday)', tone: 'down' };
+    const pct = Math.round(((curr - prev) / prev) * 100);
+    if (pct > 0) return { text: `↑ ${pct}% vs yesterday`, tone: 'up' };
+    if (pct < 0) return { text: `↓ ${Math.abs(pct)}% vs yesterday`, tone: 'down' };
+    return { text: 'flat vs yesterday', tone: 'flat' };
+}
+
+function Money({ value, sym }) {
+    const v = Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return <span>{sym}{v}</span>;
+}
+
+/**
+ * Lightweight bar chart as inline SVG. Pure CSS/SVG — no chart lib.
+ */
+function MiniBarChart({ series, valueFormatter, color = '#4f46e5' }) {
+    if (!series?.length) return <EmptyState text="No data yet" />;
+    const max = Math.max(...series.map((p) => Number(p.value) || 0), 1);
+    const w = 100 / series.length;
     return (
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-3 text-sm font-semibold text-slate-700">{title}</div>
-            <ul className="space-y-2 text-sm text-slate-500">
-                {items.map((it) => (
-                    <li key={it} className="flex items-center justify-between">
-                        <span>{it}</span>
-                        <span className="text-xs text-slate-400">— available later</span>
-                    </li>
-                ))}
-            </ul>
+        <div>
+            <svg viewBox="0 0 100 50" className="h-32 w-full" preserveAspectRatio="none">
+                {series.map((p, i) => {
+                    const h = (Number(p.value) / max) * 45;
+                    return (
+                        <rect
+                            key={i}
+                            x={i * w + w * 0.15}
+                            y={50 - h}
+                            width={w * 0.7}
+                            height={Math.max(h, 0.5)}
+                            fill={color}
+                            opacity={0.85}
+                        >
+                            <title>{p.date}: {valueFormatter ? valueFormatter(p.value) : p.value}</title>
+                        </rect>
+                    );
+                })}
+            </svg>
+            <div className="mt-1 flex justify-between text-[10px] text-slate-400">
+                <span>{series[0]?.date?.slice(5)}</span>
+                <span>{series[series.length - 1]?.date?.slice(5)}</span>
+            </div>
         </div>
     );
 }
 
-export default function Dashboard({ stats }) {
+/**
+ * Horizontal bar list — used for status distribution (donut alternative).
+ */
+function HBarList({ data, total }) {
+    if (!data?.length) return <EmptyState text="No orders this month yet" />;
+    const max = Math.max(...data.map((d) => d.count), 1);
+    return (
+        <ul className="space-y-2">
+            {data.map((d) => {
+                const pct = max > 0 ? Math.round((d.count / max) * 100) : 0;
+                const sharePct = total > 0 ? Math.round((d.count / total) * 100) : 0;
+                return (
+                    <li key={d.status}>
+                        <div className="flex items-center justify-between text-xs">
+                            <StatusBadge value={d.status} />
+                            <span className="tabular-nums text-slate-600">
+                                {d.count} <span className="text-slate-400">({sharePct}%)</span>
+                            </span>
+                        </div>
+                        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                            <div className="h-full rounded-full bg-indigo-500" style={{ width: pct + '%' }} />
+                        </div>
+                    </li>
+                );
+            })}
+        </ul>
+    );
+}
+
+function Card({ title, action, children, padded = true }) {
+    return (
+        <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            {(title || action) && (
+                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
+                    <h2 className="text-sm font-semibold text-slate-700">{title}</h2>
+                    {action}
+                </div>
+            )}
+            <div className={padded ? 'p-4' : ''}>{children}</div>
+        </div>
+    );
+}
+
+function EmptyState({ text }) {
+    return (
+        <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-slate-200 text-xs text-slate-400">
+            {text}
+        </div>
+    );
+}
+
+function AlertRow({ label, count, href, tone = 'slate' }) {
+    const toneClass = {
+        slate: 'text-slate-700',
+        amber: 'text-amber-700',
+        red: 'text-red-700',
+        indigo: 'text-indigo-700',
+    }[tone] ?? 'text-slate-700';
+    const body = (
+        <div className="flex items-center justify-between rounded-md px-3 py-2 hover:bg-slate-50">
+            <span className={'text-sm ' + toneClass}>{label}</span>
+            <span className={'rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ' + (count > 0 ? 'bg-red-50 text-red-700' : 'bg-slate-100 text-slate-500')}>
+                {count}
+            </span>
+        </div>
+    );
+    return href ? <Link href={href}>{body}</Link> : body;
+}
+
+function QuickAction({ href, label, icon }) {
+    return (
+        <Link
+            href={href}
+            className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+        >
+            <span className="text-base">{icon}</span>
+            <span>{label}</span>
+        </Link>
+    );
+}
+
+/* ────────────────────── Page ────────────────────── */
+
+export default function Dashboard({ kpis, charts, tables, alerts }) {
     const { props } = usePage();
     const user = props.auth?.user;
+    const sym = props.app?.currency_symbol ?? '';
+    const can = useCan();
+
+    const sales = deltaParts(Number(kpis?.sales_today || 0), Number(kpis?.sales_yesterday || 0));
+    const orders = deltaParts(Number(kpis?.orders_today || 0), Number(kpis?.orders_yesterday || 0));
+
+    const statusTotal = (charts?.status_distribution ?? []).reduce((acc, d) => acc + d.count, 0);
 
     return (
         <AuthenticatedLayout header="Dashboard">
             <Head title="Dashboard" />
 
-            <div className="mb-6">
-                <h1 className="text-xl font-semibold text-slate-800">
-                    Welcome back, {user?.name?.split(' ')[0] ?? 'operator'}
-                </h1>
-                <p className="text-sm text-slate-500">
-                    {user?.role?.name} · {props.app?.country} · {props.app?.currency_code}
-                </p>
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+                <div>
+                    <h1 className="text-xl font-semibold text-slate-800">
+                        Welcome back, {user?.name?.split(' ')[0] ?? 'operator'}
+                    </h1>
+                    <p className="text-sm text-slate-500">
+                        {user?.role?.name} · {props.app?.country} · {props.app?.currency_code}
+                    </p>
+                </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <StatCard label="Roles" value={stats?.roles ?? 0} hint="System + custom" />
-                <StatCard label="Permissions" value={stats?.permissions ?? 0} hint="Backend-enforced" />
-                <StatCard label="Active users" value={stats?.users ?? 0} hint="Status = Active" />
-                <StatCard
-                    label="Fiscal year"
-                    value={stats?.fiscal_year ?? '—'}
-                    hint={stats?.fiscal_year_status ?? ''}
+            {/* KPI cards */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                <KpiCard
+                    label="Orders today"
+                    value={kpis?.orders_today ?? 0}
+                    deltaText={orders.text}
+                    deltaTone={orders.tone}
+                    accent="indigo"
+                />
+                <KpiCard
+                    label="Sales today"
+                    value={<Money value={kpis?.sales_today} sym={sym} />}
+                    deltaText={sales.text}
+                    deltaTone={sales.tone}
+                    accent="emerald"
+                />
+                <KpiCard
+                    label="Collections today"
+                    value={<Money value={kpis?.collections_today_amount} sym={sym} />}
+                    hint={(kpis?.collections_today_count ?? 0) + ' collected'}
+                    accent="emerald"
+                />
+                <KpiCard
+                    label="Pending orders"
+                    value={kpis?.pending_orders ?? 0}
+                    hint="New + Pending Conf. + Confirmed"
+                />
+                <KpiCard
+                    label="Ready to pack"
+                    value={kpis?.ready_to_pack ?? 0}
+                />
+                <KpiCard
+                    label="Ready to ship"
+                    value={kpis?.ready_to_ship ?? 0}
+                    hint="Packed + Ready to Ship"
+                />
+                <KpiCard
+                    label="Delayed shipments"
+                    value={kpis?.delayed_shipments ?? 0}
+                    accent={kpis?.delayed_shipments > 0 ? 'red' : 'slate'}
+                />
+                <KpiCard
+                    label="Returns today"
+                    value={kpis?.returns_today ?? 0}
+                />
+                <KpiCard
+                    label="Low stock products"
+                    value={kpis?.low_stock_products ?? 0}
+                    accent={kpis?.low_stock_products > 0 ? 'amber' : 'slate'}
+                />
+                <KpiCard
+                    label="Active customers (MTD)"
+                    value={kpis?.active_customers_this_month ?? 0}
+                    hint="Distinct customers"
                 />
             </div>
 
-            <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <PlaceholderCard
-                    title="Operations widgets (Phase 2+)"
-                    items={[
-                        'Today orders · New / Confirmed / Shipped / Delivered',
-                        'Pending collections · Net profit',
-                        'High-risk orders · Delayed shipments',
-                    ]}
-                />
-                <PlaceholderCard
-                    title="Inventory & growth widgets (Phase 3 / Phase 6)"
-                    items={[
-                        'Low stock products · Best sellers',
-                        'Marketer performance · Shipping company performance',
-                        'Unprofitable campaigns · Staff targets',
-                    ]}
-                />
+            {/* Quick actions */}
+            <div className="mt-5 flex flex-wrap gap-2">
+                {can('orders.create') && <QuickAction href={route('orders.create')} label="Create order" icon="🧾" />}
+                {can('customers.create') && <QuickAction href={route('customers.create')} label="Add customer" icon="👤" />}
+                {can('products.create') && <QuickAction href={route('products.create')} label="Add product" icon="📦" />}
+                {can('purchases.create') && <QuickAction href={route('purchase-invoices.create')} label="Add purchase invoice" icon="🧮" />}
+                {can('expenses.create') && <QuickAction href={route('expenses.create')} label="Record expense" icon="💸" />}
+                {can('shipping.view') && <QuickAction href={route('shipping.delayed')} label="Delayed shipments" icon="🚚" />}
             </div>
 
-            <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                <strong>Phase 1 foundation is live.</strong> Authentication, RBAC,
-                settings, audit log foundation, fiscal year, and seed data are
-                ready. The sidebar lists every module — items linking to pages
-                that haven&apos;t been built yet show a &quot;coming soon&quot; stub.
+            {/* Charts row */}
+            <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <Card title="Orders trend (7 days)">
+                    <MiniBarChart series={charts?.orders_trend} color="#6366f1" />
+                </Card>
+                <Card title="Sales trend (7 days)">
+                    <MiniBarChart
+                        series={charts?.sales_trend}
+                        color="#10b981"
+                        valueFormatter={(v) => `${sym}${Number(v).toFixed(2)}`}
+                    />
+                </Card>
+                <Card title="Status distribution (this month)">
+                    <HBarList data={charts?.status_distribution} total={statusTotal} />
+                </Card>
+            </div>
+
+            {/* Alerts + tables */}
+            <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <Card title="Needs attention" padded={false}>
+                    <div className="px-2 py-2">
+                        <AlertRow label="Delayed shipments" count={alerts?.delayed_shipments ?? 0} href={route('shipping.delayed')} tone="red" />
+                        <AlertRow label="Low stock products" count={alerts?.low_stock_products ?? 0} href={route('inventory.low-stock')} tone="amber" />
+                        <AlertRow label="Returns pending inspection" count={alerts?.returns_pending_inspection ?? 0} href={route('returns.index')} />
+                        <AlertRow label="Pending collections" count={alerts?.pending_collections ?? 0} href={route('collections.index')} />
+                        {can('approvals.manage') && (
+                            <AlertRow label="Pending approvals" count={alerts?.pending_approvals ?? 0} href={route('approvals.index')} tone="indigo" />
+                        )}
+                    </div>
+                </Card>
+
+                <Card title="Latest orders" action={<Link href={route('orders.index')} className="text-xs text-indigo-600 hover:underline">All orders →</Link>} padded={false}>
+                    {tables?.latest_orders?.length ? (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full text-xs">
+                                <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                                    <tr>
+                                        <th className="px-3 py-2 text-left">Order</th>
+                                        <th className="px-3 py-2 text-left">Customer</th>
+                                        <th className="px-3 py-2 text-left">Status</th>
+                                        <th className="px-3 py-2 text-right">Total</th>
+                                        <th className="px-3 py-2 text-left">Collection</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {tables.latest_orders.map((o) => (
+                                        <tr key={o.id} className="hover:bg-slate-50">
+                                            <td className="whitespace-nowrap px-3 py-1.5">
+                                                <Link href={route('orders.show', o.id)} className="font-medium text-indigo-600 hover:underline">
+                                                    {o.order_number}
+                                                </Link>
+                                            </td>
+                                            <td className="px-3 py-1.5 text-slate-700">{o.customer_name}</td>
+                                            <td className="px-3 py-1.5"><StatusBadge value={o.status} /></td>
+                                            <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-slate-700">
+                                                <Money value={o.total_amount} sym={sym} />
+                                            </td>
+                                            <td className="px-3 py-1.5"><StatusBadge value={o.collection_status} /></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    ) : (
+                        <div className="p-4"><EmptyState text="No orders yet" /></div>
+                    )}
+                </Card>
+
+                <Card title="Low stock" action={<Link href={route('inventory.low-stock')} className="text-xs text-indigo-600 hover:underline">View all →</Link>} padded={false}>
+                    {tables?.low_stock?.length ? (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full text-xs">
+                                <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                                    <tr>
+                                        <th className="px-3 py-2 text-left">SKU</th>
+                                        <th className="px-3 py-2 text-left">Product</th>
+                                        <th className="px-3 py-2 text-right">On hand</th>
+                                        <th className="px-3 py-2 text-right">Reserved</th>
+                                        <th className="px-3 py-2 text-right">Available</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {tables.low_stock.map((p) => (
+                                        <tr key={p.product_id} className="hover:bg-slate-50">
+                                            <td className="whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-slate-600">{p.sku}</td>
+                                            <td className="px-3 py-1.5 text-slate-700">{p.name}</td>
+                                            <td className="px-3 py-1.5 text-right tabular-nums text-slate-700">{p.on_hand}</td>
+                                            <td className="px-3 py-1.5 text-right tabular-nums text-slate-500">{p.reserved}</td>
+                                            <td className="px-3 py-1.5 text-right tabular-nums font-medium text-slate-800">{p.available}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    ) : (
+                        <div className="p-4"><EmptyState text="All products above reorder level" /></div>
+                    )}
+                </Card>
+            </div>
+
+            {/* Delayed shipments — full width */}
+            <div className="mt-6">
+                <Card title="Delayed shipments" action={<Link href={route('shipping.delayed')} className="text-xs text-indigo-600 hover:underline">View all →</Link>} padded={false}>
+                    {tables?.delayed_shipments?.length ? (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full text-xs">
+                                <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                                    <tr>
+                                        <th className="px-3 py-2 text-left">Order #</th>
+                                        <th className="px-3 py-2 text-left">Customer</th>
+                                        <th className="px-3 py-2 text-left">Carrier</th>
+                                        <th className="px-3 py-2 text-right">Delay (days)</th>
+                                        <th className="px-3 py-2 text-left">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {tables.delayed_shipments.map((s) => (
+                                        <tr key={s.shipment_id} className="hover:bg-slate-50">
+                                            <td className="whitespace-nowrap px-3 py-1.5">
+                                                {s.order_id ? (
+                                                    <Link href={route('orders.show', s.order_id)} className="font-medium text-indigo-600 hover:underline">
+                                                        {s.order_number}
+                                                    </Link>
+                                                ) : '—'}
+                                            </td>
+                                            <td className="px-3 py-1.5 text-slate-700">{s.customer_name ?? '—'}</td>
+                                            <td className="px-3 py-1.5 text-slate-600">{s.carrier ?? '—'}</td>
+                                            <td className="px-3 py-1.5 text-right tabular-nums text-slate-700">{s.delay_days ?? '—'}</td>
+                                            <td className="px-3 py-1.5"><StatusBadge value={s.status} /></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    ) : (
+                        <div className="p-4"><EmptyState text="No delayed shipments — all carriers on time" /></div>
+                    )}
+                </Card>
             </div>
         </AuthenticatedLayout>
     );
