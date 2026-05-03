@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreOrderRequest;
 use App\Http\Requests\UpdateOrderRequest;
+use App\Models\Category;
 use App\Models\Order;
 use App\Models\Product;
 use App\Services\AuditLogService;
@@ -12,6 +13,7 @@ use App\Services\OrderService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -53,13 +55,68 @@ class OrdersController extends Controller
     public function create(): Response
     {
         return Inertia::render('Orders/Create', [
-            'products' => Product::query()
+            'products' => $this->productsForOrderEntry(),
+            'categories' => Category::query()
                 ->where('status', 'Active')
                 ->orderBy('name')
-                ->get(['id', 'sku', 'name', 'selling_price', 'minimum_selling_price', 'tax_enabled', 'tax_rate']),
+                ->get(['id', 'name', 'parent_id']),
             'locations' => CustomersController::locationTree(),
             'default_country_code' => \App\Services\SettingsService::get('default_country_code', 'EG'),
         ]);
+    }
+
+    /**
+     * Active products with derived available_stock (on-hand minus
+     * outstanding reservations). Single grouped query — same SUM-CASE
+     * pattern used by InventoryController and DashboardController.
+     *
+     * @return \Illuminate\Support\Collection<int, object>
+     */
+    private function productsForOrderEntry()
+    {
+        $stockTypes = "'Purchase','Return To Stock','Opening Balance','Transfer In','Adjustment','Stock Count Correction','Ship','Return Damaged','Transfer Out'";
+
+        return DB::table('products')
+            ->leftJoin('inventory_movements', 'products.id', '=', 'inventory_movements.product_id')
+            ->leftJoin('categories', 'products.category_id', '=', 'categories.id')
+            ->whereNull('products.deleted_at')
+            ->where('products.status', 'Active')
+            ->selectRaw("
+                products.id,
+                products.sku,
+                products.barcode,
+                products.name,
+                products.selling_price,
+                products.minimum_selling_price,
+                products.tax_enabled,
+                products.tax_rate,
+                products.category_id,
+                categories.name AS category_name,
+                COALESCE(SUM(CASE WHEN inventory_movements.movement_type IN ($stockTypes) THEN inventory_movements.quantity ELSE 0 END), 0) AS on_hand,
+                COALESCE(SUM(CASE WHEN inventory_movements.movement_type = 'Reserve' THEN inventory_movements.quantity ELSE 0 END), 0)
+                  - COALESCE(SUM(CASE WHEN inventory_movements.movement_type = 'Release Reservation' THEN inventory_movements.quantity ELSE 0 END), 0) AS reserved
+            ")
+            ->groupBy([
+                'products.id', 'products.sku', 'products.barcode', 'products.name',
+                'products.selling_price', 'products.minimum_selling_price',
+                'products.tax_enabled', 'products.tax_rate',
+                'products.category_id', 'categories.name',
+            ])
+            ->orderBy('products.name')
+            ->get()
+            ->map(fn ($p) => [
+                'id' => (int) $p->id,
+                'sku' => $p->sku,
+                'barcode' => $p->barcode,
+                'name' => $p->name,
+                'selling_price' => (float) $p->selling_price,
+                'minimum_selling_price' => (float) $p->minimum_selling_price,
+                'tax_enabled' => (bool) $p->tax_enabled,
+                'tax_rate' => (float) $p->tax_rate,
+                'category_id' => $p->category_id ? (int) $p->category_id : null,
+                'category_name' => $p->category_name,
+                'available' => max(0, (int) $p->on_hand - (int) $p->reserved),
+            ]);
     }
 
     public function store(StoreOrderRequest $request): RedirectResponse

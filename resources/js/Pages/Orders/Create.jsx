@@ -5,9 +5,9 @@ import StatusBadge from '@/Components/StatusBadge';
 import LocationSelect from '@/Components/LocationSelect';
 import useCan from '@/Hooks/useCan';
 import { Head, Link, useForm, usePage, router } from '@inertiajs/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-export default function OrderCreate({ products, locations = [], default_country_code = 'EG' }) {
+export default function OrderCreate({ products, categories = [], locations = [], default_country_code = 'EG' }) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
     const can = useCan();
@@ -15,6 +15,13 @@ export default function OrderCreate({ products, locations = [], default_country_
     const [matchedCustomer, setMatchedCustomer] = useState(null);
     const [duplicate, setDuplicate] = useState(null);
     const [quickModalOpen, setQuickModalOpen] = useState(false);
+
+    /* Phase 3: product entry state */
+    const [categoryFilter, setCategoryFilter] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [scanInput, setScanInput] = useState('');
+    const [scanFeedback, setScanFeedback] = useState(null); // {tone:'success'|'error', text}
+    const scanInputRef = useRef(null);
 
     const defaultCountryName = (locations.find((c) => c.code === default_country_code)?.name_en) ?? 'Egypt';
 
@@ -31,7 +38,7 @@ export default function OrderCreate({ products, locations = [], default_country_
         discount_amount: 0,
         shipping_amount: 0,
         extra_fees: 0,
-        items: [{ product_id: '', quantity: 1, unit_price: 0, discount_amount: 0 }],
+        items: [],
         duplicate_acknowledged: false,
     });
 
@@ -83,15 +90,88 @@ export default function OrderCreate({ products, locations = [], default_country_
     const updateItem = (idx, key, value) => {
         const next = [...data.items];
         next[idx] = { ...next[idx], [key]: value };
-        if (key === 'product_id') {
-            const p = products.find((x) => x.id === Number(value));
-            if (p) next[idx].unit_price = p.selling_price;
-        }
         setData('items', next);
     };
 
-    const addItem = () => setData('items', [...data.items, { product_id: '', quantity: 1, unit_price: 0, discount_amount: 0 }]);
     const removeItem = (idx) => setData('items', data.items.filter((_, i) => i !== idx));
+
+    /**
+     * Add a product to the items list. If it's already there, increment its qty.
+     * Used by both the [+ Add] button on the search results and the scan handler.
+     */
+    const addProductToItems = (product, qtyDelta = 1) => {
+        const existingIdx = data.items.findIndex((it) => Number(it.product_id) === Number(product.id));
+        if (existingIdx >= 0) {
+            const next = [...data.items];
+            next[existingIdx] = {
+                ...next[existingIdx],
+                quantity: Number(next[existingIdx].quantity || 0) + qtyDelta,
+            };
+            setData('items', next);
+        } else {
+            setData('items', [
+                ...data.items,
+                {
+                    product_id: product.id,
+                    quantity: qtyDelta,
+                    unit_price: product.selling_price,
+                    discount_amount: 0,
+                },
+            ]);
+        }
+    };
+
+    /**
+     * Lookup helper used by the scan field. Matches against:
+     *   - product SKU (exact, case-insensitive)
+     *   - product barcode (exact, case-insensitive)
+     */
+    const findExactByScan = (raw) => {
+        const v = (raw || '').trim().toLowerCase();
+        if (!v) return null;
+        return (
+            products.find((p) => (p.sku || '').toLowerCase() === v) ||
+            products.find((p) => (p.barcode || '').toLowerCase() === v) ||
+            null
+        );
+    };
+
+    const handleScanKey = (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const value = scanInput;
+        const match = findExactByScan(value);
+        if (!match) {
+            setScanFeedback({ tone: 'error', text: `No product matches "${value}".` });
+            // Keep value in field so the operator can correct typos
+            scanInputRef.current?.focus();
+            return;
+        }
+        addProductToItems(match);
+        setScanFeedback({ tone: 'success', text: `Added: ${match.name} (${match.sku})` });
+        setScanInput('');
+        scanInputRef.current?.focus();
+    };
+
+    /**
+     * Search-filter results. Limited to 25 visible rows so a long catalogue
+     * doesn't dump everything before the operator types anything.
+     */
+    const searchResults = useMemo(() => {
+        const q = searchQuery.trim().toLowerCase();
+        let list = products;
+        if (categoryFilter) {
+            list = list.filter((p) => Number(p.category_id) === Number(categoryFilter));
+        }
+        if (q) {
+            list = list.filter((p) =>
+                (p.name || '').toLowerCase().includes(q) ||
+                (p.sku || '').toLowerCase().includes(q) ||
+                (p.barcode || '').toLowerCase().includes(q)
+            );
+        }
+        return list.slice(0, 25);
+    }, [products, categoryFilter, searchQuery]);
 
     /* Live totals */
     const totals = useMemo(() => {
@@ -262,38 +342,184 @@ export default function OrderCreate({ products, locations = [], default_country_
 
                 {/* Items */}
                 <section className="rounded-lg border border-slate-200 bg-white p-5">
-                    <div className="mb-3 flex items-center justify-between">
-                        <h2 className="text-sm font-semibold text-slate-700">Items</h2>
-                        <button type="button" onClick={addItem} className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs">
-                            + Add item
-                        </button>
+                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Items</h2>
+
+                    {/* Product entry toolbar: category filter + search + scan */}
+                    <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-12">
+                        <select
+                            value={categoryFilter}
+                            onChange={(e) => setCategoryFilter(e.target.value)}
+                            className="rounded-md border-slate-300 text-sm sm:col-span-3"
+                            aria-label="Filter by category"
+                        >
+                            <option value="">All categories</option>
+                            {categories.map((c) => (
+                                <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                        </select>
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="Search by product name or SKU"
+                            className="rounded-md border-slate-300 text-sm sm:col-span-5"
+                            aria-label="Search products by name or SKU"
+                        />
+                        <input
+                            ref={scanInputRef}
+                            type="text"
+                            value={scanInput}
+                            onChange={(e) => { setScanInput(e.target.value); if (scanFeedback) setScanFeedback(null); }}
+                            onKeyDown={handleScanKey}
+                            placeholder="Scan SKU / Barcode + Enter"
+                            className="rounded-md border-slate-300 text-sm sm:col-span-4"
+                            aria-label="Scan SKU or barcode"
+                        />
                     </div>
 
-                    <div className="space-y-3">
-                        {data.items.map((it, idx) => (
-                            <div key={idx} className="grid grid-cols-12 gap-2">
-                                <select
-                                    value={it.product_id}
-                                    onChange={(e) => updateItem(idx, 'product_id', e.target.value)}
-                                    className="col-span-5 rounded-md border-slate-300 text-sm"
-                                >
-                                    <option value="">— Pick product (SKU) —</option>
-                                    {products.map((p) => (
-                                        <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>
-                                    ))}
-                                </select>
-                                <input type="number" min={1} value={it.quantity} onChange={(e) => updateItem(idx, 'quantity', e.target.value)} placeholder="Qty" className="col-span-1 rounded-md border-slate-300 text-sm" />
-                                <input type="number" step="0.01" min={0} value={it.unit_price} onChange={(e) => updateItem(idx, 'unit_price', e.target.value)} placeholder="Unit price" className="col-span-2 rounded-md border-slate-300 text-sm" />
-                                <input type="number" step="0.01" min={0} value={it.discount_amount} onChange={(e) => updateItem(idx, 'discount_amount', e.target.value)} placeholder="Discount" className="col-span-2 rounded-md border-slate-300 text-sm" />
-                                <div className="col-span-1 self-center text-right text-sm tabular-nums text-slate-600">
-                                    {sym}{((Number(it.unit_price) * Number(it.quantity)) - Number(it.discount_amount || 0)).toFixed(2)}
-                                </div>
-                                <button type="button" onClick={() => removeItem(idx)} className="col-span-1 self-center text-xs text-red-500 hover:underline" disabled={data.items.length === 1}>
-                                    remove
-                                </button>
+                    {scanFeedback && (
+                        <div
+                            className={
+                                'mb-3 rounded-md border px-3 py-2 text-xs ' +
+                                (scanFeedback.tone === 'success'
+                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                    : 'border-red-200 bg-red-50 text-red-700')
+                            }
+                        >
+                            {scanFeedback.text}
+                        </div>
+                    )}
+
+                    {/* Search results panel */}
+                    <div className="mb-4 rounded-md border border-slate-200">
+                        {searchResults.length === 0 ? (
+                            <div className="px-3 py-6 text-center text-xs text-slate-400">
+                                {searchQuery || categoryFilter
+                                    ? 'No products match the current filter / search.'
+                                    : 'Type a name, pick a category, or scan a SKU above to find products.'}
                             </div>
-                        ))}
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full text-xs">
+                                    <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left">Product</th>
+                                            <th className="px-3 py-2 text-left">SKU</th>
+                                            <th className="px-3 py-2 text-left">Category</th>
+                                            <th className="px-3 py-2 text-right">Price</th>
+                                            <th className="px-3 py-2 text-right">Available</th>
+                                            <th className="px-3 py-2 text-right"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {searchResults.map((p) => (
+                                            <tr key={p.id} className="hover:bg-slate-50">
+                                                <td className="px-3 py-1.5 text-slate-700">{p.name}</td>
+                                                <td className="px-3 py-1.5 font-mono text-[11px] text-slate-500">{p.sku}</td>
+                                                <td className="px-3 py-1.5 text-slate-500">{p.category_name ?? '—'}</td>
+                                                <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-slate-700">{sym}{Number(p.selling_price).toFixed(2)}</td>
+                                                <td className={'whitespace-nowrap px-3 py-1.5 text-right tabular-nums ' + (p.available <= 0 ? 'text-red-600' : 'text-slate-700')}>{p.available}</td>
+                                                <td className="whitespace-nowrap px-3 py-1.5 text-right">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => addProductToItems(p)}
+                                                        className="rounded-md border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100"
+                                                    >
+                                                        + Add
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                {searchResults.length === 25 && (
+                                    <div className="border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-400">
+                                        Showing first 25 — narrow the search to see more.
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
+
+                    {/* Selected order items */}
+                    {data.items.length === 0 ? (
+                        <div className="rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
+                            No items yet — search or scan above to add the first one.
+                        </div>
+                    ) : (
+                        <div className="overflow-x-auto rounded-md border border-slate-200">
+                            <table className="min-w-full text-xs">
+                                <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                                    <tr>
+                                        <th className="px-3 py-2 text-left">Product</th>
+                                        <th className="px-3 py-2 text-left">SKU</th>
+                                        <th className="px-3 py-2 text-right">Qty</th>
+                                        <th className="px-3 py-2 text-right">Unit price</th>
+                                        <th className="px-3 py-2 text-right">Discount</th>
+                                        <th className="px-3 py-2 text-right">Line total</th>
+                                        <th className="px-3 py-2 text-right"></th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {data.items.map((it, idx) => {
+                                        const p = products.find((x) => Number(x.id) === Number(it.product_id));
+                                        const lineTotal = (Number(it.unit_price) * Number(it.quantity)) - Number(it.discount_amount || 0);
+                                        const overReserved = p && Number(it.quantity) > Number(p.available);
+                                        return (
+                                            <tr key={idx} className="hover:bg-slate-50">
+                                                <td className="px-3 py-1.5 text-slate-700">{p?.name ?? '—'}</td>
+                                                <td className="px-3 py-1.5 font-mono text-[11px] text-slate-500">{p?.sku ?? '—'}</td>
+                                                <td className="px-3 py-1.5 text-right">
+                                                    <input
+                                                        type="number"
+                                                        min={1}
+                                                        value={it.quantity}
+                                                        onChange={(e) => updateItem(idx, 'quantity', e.target.value)}
+                                                        className={'w-16 rounded-md text-right text-xs tabular-nums ' + (overReserved ? 'border-red-300 text-red-700' : 'border-slate-300')}
+                                                    />
+                                                    {overReserved && (
+                                                        <div className="mt-0.5 text-[10px] text-red-600">{p.available} avail.</div>
+                                                    )}
+                                                </td>
+                                                <td className="px-3 py-1.5 text-right">
+                                                    <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        min={0}
+                                                        value={it.unit_price}
+                                                        onChange={(e) => updateItem(idx, 'unit_price', e.target.value)}
+                                                        className="w-20 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                    />
+                                                </td>
+                                                <td className="px-3 py-1.5 text-right">
+                                                    <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        min={0}
+                                                        value={it.discount_amount}
+                                                        onChange={(e) => updateItem(idx, 'discount_amount', e.target.value)}
+                                                        className="w-20 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                    />
+                                                </td>
+                                                <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-slate-700">
+                                                    {sym}{lineTotal.toFixed(2)}
+                                                </td>
+                                                <td className="whitespace-nowrap px-3 py-1.5 text-right">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => removeItem(idx)}
+                                                        className="text-[11px] text-red-500 hover:underline"
+                                                    >
+                                                        remove
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
 
                     {errors.items && <p className="mt-2 text-xs text-red-600">{errors.items}</p>}
                 </section>
