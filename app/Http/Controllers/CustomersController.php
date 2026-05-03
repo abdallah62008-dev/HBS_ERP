@@ -60,7 +60,7 @@ class CustomersController extends Controller
         return Inertia::render('Customers/Create');
     }
 
-    public function store(StoreCustomerRequest $request): RedirectResponse
+    public function store(StoreCustomerRequest $request): RedirectResponse|\Illuminate\Http\JsonResponse
     {
         $data = $request->validated();
         $tags = $data['tags'] ?? [];
@@ -84,6 +84,17 @@ class CustomersController extends Controller
 
             return $customer;
         });
+
+        // AJAX consumers (the inline "+ New customer" modal on the order
+        // form) want the new row back as JSON so they can auto-select it
+        // without losing the in-progress order state. Browser POSTs from
+        // the standalone /customers/create page still get the redirect.
+        if ($request->expectsJson() || $request->wantsJson()) {
+            return response()->json([
+                'customer' => $customer->fresh()->loadCount('orders'),
+                'message' => 'Customer created.',
+            ]);
+        }
 
         return redirect()
             ->route('customers.show', $customer)

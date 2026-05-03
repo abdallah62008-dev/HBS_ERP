@@ -2,15 +2,18 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import FormField from '@/Components/FormField';
 import StatusBadge from '@/Components/StatusBadge';
+import useCan from '@/Hooks/useCan';
 import { Head, Link, useForm, usePage, router } from '@inertiajs/react';
 import { useEffect, useMemo, useState } from 'react';
 
 export default function OrderCreate({ products }) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
+    const can = useCan();
 
     const [matchedCustomer, setMatchedCustomer] = useState(null);
     const [duplicate, setDuplicate] = useState(null);
+    const [quickModalOpen, setQuickModalOpen] = useState(false);
 
     const { data, setData, post, processing, errors, transform } = useForm({
         customer_id: null,
@@ -133,7 +136,18 @@ export default function OrderCreate({ products }) {
             <form onSubmit={submit} className="space-y-5">
                 {/* Customer panel */}
                 <section className="rounded-lg border border-slate-200 bg-white p-5">
-                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Customer</h2>
+                    <div className="mb-3 flex items-center justify-between">
+                        <h2 className="text-sm font-semibold text-slate-700">Customer</h2>
+                        {can('customers.create') && !data.customer_id && (
+                            <button
+                                type="button"
+                                onClick={() => setQuickModalOpen(true)}
+                                className="rounded-md border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                            >
+                                + New customer
+                            </button>
+                        )}
+                    </div>
 
                     {data.customer_id && matchedCustomer ? (
                         <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
@@ -326,6 +340,164 @@ export default function OrderCreate({ products }) {
                     </button>
                 </div>
             </form>
+
+            {quickModalOpen && (
+                <QuickCustomerModal
+                    initial={{
+                        name: data.customer.name,
+                        primary_phone: data.customer.primary_phone,
+                        secondary_phone: data.customer.secondary_phone,
+                        email: data.customer.email,
+                        city: data.customer.city || data.city || 'Cairo',
+                        country: data.customer.country || data.country || 'Egypt',
+                        default_address: data.customer_address,
+                    }}
+                    onClose={() => setQuickModalOpen(false)}
+                    onCreated={(customer) => {
+                        // Adopt the new customer into the order form without
+                        // touching items, totals, or notes.
+                        setData((prev) => ({
+                            ...prev,
+                            customer_id: customer.id,
+                            customer_address: customer.default_address ?? prev.customer_address,
+                            city: customer.city ?? prev.city,
+                            governorate: customer.governorate ?? prev.governorate,
+                            country: customer.country ?? prev.country,
+                        }));
+                        setMatchedCustomer(customer);
+                        setQuickModalOpen(false);
+                    }}
+                />
+            )}
         </AuthenticatedLayout>
+    );
+}
+
+/**
+ * Inline modal for creating a customer without leaving the order form.
+ * POSTs to `/customers` with an Accept: application/json header — the
+ * controller (CustomersController::store) returns the created customer
+ * as JSON in that case. RBAC is enforced by the same `permission:customers.create`
+ * middleware on the route, so this UI is only reachable for users who
+ * could already create customers via /customers/create.
+ */
+function QuickCustomerModal({ initial, onClose, onCreated }) {
+    const [form, setForm] = useState({
+        name: initial.name ?? '',
+        primary_phone: initial.primary_phone ?? '',
+        secondary_phone: initial.secondary_phone ?? '',
+        email: initial.email ?? '',
+        city: initial.city ?? 'Cairo',
+        country: initial.country ?? 'Egypt',
+        default_address: initial.default_address ?? '',
+    });
+    const [errors, setErrors] = useState({});
+    const [submitting, setSubmitting] = useState(false);
+    const [generalError, setGeneralError] = useState(null);
+
+    const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+    const submit = async (e) => {
+        e.preventDefault();
+        setSubmitting(true);
+        setErrors({});
+        setGeneralError(null);
+
+        try {
+            const xsrf = decodeURIComponent(
+                document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] ?? ''
+            );
+            const res = await fetch(route('customers.store'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-XSRF-TOKEN': xsrf,
+                },
+                body: JSON.stringify(form),
+            });
+            if (res.status === 422) {
+                const j = await res.json();
+                setErrors(j.errors || {});
+                return;
+            }
+            if (res.status === 403) {
+                setGeneralError('You do not have permission to create customers.');
+                return;
+            }
+            if (!res.ok) {
+                setGeneralError('Could not create customer. Try again.');
+                return;
+            }
+            const j = await res.json();
+            onCreated(j.customer);
+        } catch (err) {
+            setGeneralError('Network error. Try again.');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4"
+            onClick={onClose}
+        >
+            <div
+                className="w-full max-w-lg rounded-lg bg-white shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <form onSubmit={submit}>
+                    <div className="border-b border-slate-200 px-5 py-3">
+                        <h3 className="text-sm font-semibold text-slate-800">New customer</h3>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                            Saved immediately. The order form keeps your items and totals.
+                        </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-2">
+                        <FormField label="Name" name="name" value={form.name} onChange={(v) => update('name', v)} error={errors.name?.[0]} required />
+                        <FormField label="Primary phone" name="primary_phone" value={form.primary_phone} onChange={(v) => update('primary_phone', v)} error={errors.primary_phone?.[0]} required />
+                        <FormField label="Secondary phone" name="secondary_phone" value={form.secondary_phone} onChange={(v) => update('secondary_phone', v)} error={errors.secondary_phone?.[0]} />
+                        <FormField label="Email" type="email" name="email" value={form.email} onChange={(v) => update('email', v)} error={errors.email?.[0]} />
+                        <FormField label="City" name="city" value={form.city} onChange={(v) => update('city', v)} error={errors.city?.[0]} required />
+                        <FormField label="Country" name="country" value={form.country} onChange={(v) => update('country', v)} error={errors.country?.[0]} required />
+                        <FormField label="Address" name="default_address" error={errors.default_address?.[0]} required className="sm:col-span-2">
+                            <textarea
+                                id="default_address"
+                                rows={2}
+                                value={form.default_address}
+                                onChange={(e) => update('default_address', e.target.value)}
+                                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm"
+                            />
+                        </FormField>
+                    </div>
+
+                    {generalError && (
+                        <div className="mx-5 mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                            {generalError}
+                        </div>
+                    )}
+
+                    <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={submitting}
+                            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+                        >
+                            {submitting ? 'Saving…' : 'Save & select'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
     );
 }
