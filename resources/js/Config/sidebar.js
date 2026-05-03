@@ -44,17 +44,34 @@ export const sidebarSections = [
         ],
     },
     {
-        title: 'Operations',
+        // Customer-facing daily workflow: order intake, customer record,
+        // catalogue browsing, returns, tickets.
+        title: 'Sales',
         items: [
             { label: 'Orders', href: '/orders', icon: I.cart, permission: 'orders.view' },
             { label: 'Customers', href: '/customers', icon: I.users, permission: 'customers.view' },
             { label: 'Products', href: '/products', icon: I.box, permission: 'products.view' },
+            { label: 'Returns', href: '/returns', icon: I.revert, permission: 'returns.view' },
+            { label: 'Tickets', href: '/tickets', icon: I.ticket /* permission added in Phase 4 */ },
+        ],
+    },
+    {
+        // Warehouse / inbound flow: stock visibility, adjustments, counts,
+        // purchases, suppliers.
+        title: 'Warehouse & Inventory',
+        items: [
             { label: 'Inventory', href: '/inventory', icon: I.layers, permission: 'inventory.view' },
             { label: 'Warehouses', href: '/warehouses', icon: I.box, permission: 'inventory.view' },
             { label: 'Stock adjustments', href: '/stock-adjustments', icon: I.layers, permission: 'inventory.view_movements' },
             { label: 'Stock counts', href: '/stock-counts', icon: I.layers, permission: 'inventory.count' },
             { label: 'Purchase invoices', href: '/purchase-invoices', icon: I.receipt, permission: 'purchases.view' },
             { label: 'Suppliers', href: '/suppliers', icon: I.users, permission: 'suppliers.view' },
+        ],
+    },
+    {
+        // Outbound dispatch + COD reconciliation.
+        title: 'Shipping & Collections',
+        items: [
             { label: 'Shipping', href: '/shipping', icon: I.truck, permission: 'shipping.view' },
             { label: 'Ready to pack', href: '/shipping/ready-to-pack', icon: I.truck, permission: 'shipping.view' },
             { label: 'Ready to ship', href: '/shipping/ready-to-ship', icon: I.truck, permission: 'shipping.view' },
@@ -62,8 +79,6 @@ export const sidebarSections = [
             { label: 'Carriers & rates', href: '/shipping-companies', icon: I.truck, permission: 'shipping.view' },
             { label: 'Labels', href: '/shipping-labels', icon: I.receipt, permission: 'shipping.print_label' },
             { label: 'Collections', href: '/collections', icon: I.cash, permission: 'collections.view' },
-            { label: 'Returns', href: '/returns', icon: I.revert, permission: 'returns.view' },
-            { label: 'Tickets', href: '/tickets', icon: I.ticket /* permission added in Phase 4 */ },
         ],
     },
     {
