@@ -2,11 +2,12 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import FormField from '@/Components/FormField';
 import StatusBadge from '@/Components/StatusBadge';
+import LocationSelect from '@/Components/LocationSelect';
 import useCan from '@/Hooks/useCan';
 import { Head, Link, useForm, usePage, router } from '@inertiajs/react';
 import { useEffect, useMemo, useState } from 'react';
 
-export default function OrderCreate({ products }) {
+export default function OrderCreate({ products, locations = [], default_country_code = 'EG' }) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
     const can = useCan();
@@ -15,13 +16,15 @@ export default function OrderCreate({ products }) {
     const [duplicate, setDuplicate] = useState(null);
     const [quickModalOpen, setQuickModalOpen] = useState(false);
 
+    const defaultCountryName = (locations.find((c) => c.code === default_country_code)?.name_en) ?? 'Egypt';
+
     const { data, setData, post, processing, errors, transform } = useForm({
         customer_id: null,
-        customer: { name: '', primary_phone: '', secondary_phone: '', email: '', city: '', governorate: '', country: 'Egypt' },
+        customer: { name: '', primary_phone: '', secondary_phone: '', email: '', city: '', governorate: '', country: defaultCountryName },
         customer_address: '',
         city: '',
         governorate: '',
-        country: 'Egypt',
+        country: defaultCountryName,
         source: '',
         notes: '',
         internal_notes: '',
@@ -188,8 +191,21 @@ export default function OrderCreate({ products }) {
                                 />
                                 <FormField label="Email" type="email" name="customer.email" value={data.customer.email} onChange={(v) => setData('customer', { ...data.customer, email: v })} error={errors['customer.email']} />
                                 <FormField label="Secondary phone" name="customer.secondary_phone" value={data.customer.secondary_phone} onChange={(v) => setData('customer', { ...data.customer, secondary_phone: v })} error={errors['customer.secondary_phone']} />
-                                <FormField label="City" name="customer.city" value={data.customer.city} onChange={(v) => setData('customer', { ...data.customer, city: v })} error={errors['customer.city']} required />
-                                <FormField label="Country" name="customer.country" value={data.customer.country} onChange={(v) => setData('customer', { ...data.customer, country: v })} error={errors['customer.country']} required />
+                                <LocationSelect
+                                    locations={locations}
+                                    country={data.customer.country}
+                                    state={data.customer.governorate}
+                                    city={data.customer.city}
+                                    onChange={({ country, state, city }) => {
+                                        setData('customer', { ...data.customer, country, governorate: state, city });
+                                    }}
+                                    errors={{
+                                        country: errors['customer.country'],
+                                        state: errors['customer.governorate'],
+                                        city: errors['customer.city'],
+                                    }}
+                                    required
+                                />
                             </div>
 
                             {matchedCustomer && (
@@ -227,9 +243,19 @@ export default function OrderCreate({ products }) {
                                 className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm"
                             />
                         </FormField>
-                        <FormField label="City" name="city" value={data.city} onChange={(v) => setData('city', v)} error={errors.city} required />
-                        <FormField label="Governorate" name="governorate" value={data.governorate} onChange={(v) => setData('governorate', v)} error={errors.governorate} />
-                        <FormField label="Country" name="country" value={data.country} onChange={(v) => setData('country', v)} error={errors.country} required />
+                        <LocationSelect
+                            locations={locations}
+                            country={data.country}
+                            state={data.governorate}
+                            city={data.city}
+                            onChange={({ country, state, city }) => {
+                                setData('country', country);
+                                setData('governorate', state);
+                                setData('city', city);
+                            }}
+                            errors={{ country: errors.country, state: errors.governorate, city: errors.city }}
+                            required
+                        />
                         <FormField label="Source" name="source" value={data.source} onChange={(v) => setData('source', v)} error={errors.source} hint="e.g. Facebook, TikTok, Walk-in" />
                     </div>
                 </section>
@@ -343,13 +369,15 @@ export default function OrderCreate({ products }) {
 
             {quickModalOpen && (
                 <QuickCustomerModal
+                    locations={locations}
                     initial={{
                         name: data.customer.name,
                         primary_phone: data.customer.primary_phone,
                         secondary_phone: data.customer.secondary_phone,
                         email: data.customer.email,
-                        city: data.customer.city || data.city || 'Cairo',
-                        country: data.customer.country || data.country || 'Egypt',
+                        governorate: data.customer.governorate || data.governorate || '',
+                        city: data.customer.city || data.city || '',
+                        country: data.customer.country || data.country || defaultCountryName,
                         default_address: data.customer_address,
                     }}
                     onClose={() => setQuickModalOpen(false)}
@@ -381,13 +409,14 @@ export default function OrderCreate({ products }) {
  * middleware on the route, so this UI is only reachable for users who
  * could already create customers via /customers/create.
  */
-function QuickCustomerModal({ initial, onClose, onCreated }) {
+function QuickCustomerModal({ initial, onClose, onCreated, locations = [] }) {
     const [form, setForm] = useState({
         name: initial.name ?? '',
         primary_phone: initial.primary_phone ?? '',
         secondary_phone: initial.secondary_phone ?? '',
         email: initial.email ?? '',
-        city: initial.city ?? 'Cairo',
+        governorate: initial.governorate ?? '',
+        city: initial.city ?? '',
         country: initial.country ?? 'Egypt',
         default_address: initial.default_address ?? '',
     });
@@ -461,8 +490,21 @@ function QuickCustomerModal({ initial, onClose, onCreated }) {
                         <FormField label="Primary phone" name="primary_phone" value={form.primary_phone} onChange={(v) => update('primary_phone', v)} error={errors.primary_phone?.[0]} required />
                         <FormField label="Secondary phone" name="secondary_phone" value={form.secondary_phone} onChange={(v) => update('secondary_phone', v)} error={errors.secondary_phone?.[0]} />
                         <FormField label="Email" type="email" name="email" value={form.email} onChange={(v) => update('email', v)} error={errors.email?.[0]} />
-                        <FormField label="City" name="city" value={form.city} onChange={(v) => update('city', v)} error={errors.city?.[0]} required />
-                        <FormField label="Country" name="country" value={form.country} onChange={(v) => update('country', v)} error={errors.country?.[0]} required />
+                        <LocationSelect
+                            locations={locations}
+                            country={form.country}
+                            state={form.governorate}
+                            city={form.city}
+                            onChange={({ country, state, city }) => {
+                                setForm((f) => ({ ...f, country, governorate: state, city }));
+                            }}
+                            errors={{
+                                country: errors.country?.[0],
+                                state: errors.governorate?.[0],
+                                city: errors.city?.[0],
+                            }}
+                            required
+                        />
                         <FormField label="Address" name="default_address" error={errors.default_address?.[0]} required className="sm:col-span-2">
                             <textarea
                                 id="default_address"

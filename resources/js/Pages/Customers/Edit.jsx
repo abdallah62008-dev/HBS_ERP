@@ -3,7 +3,7 @@ import PageHeader from '@/Components/PageHeader';
 import CustomerForm from './Form';
 import { Head, useForm, Link } from '@inertiajs/react';
 
-export default function CustomerEdit({ customer, tags }) {
+export default function CustomerEdit({ customer, tags, locations = [] }) {
     const { data, setData, put, processing, errors } = useForm({
         name: customer.name ?? '',
         primary_phone: customer.primary_phone ?? '',
@@ -29,7 +29,7 @@ export default function CustomerEdit({ customer, tags }) {
             <PageHeader title={`Edit ${customer.name}`} subtitle={customer.primary_phone} />
 
             <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5">
-                <CustomerForm data={data} setData={setData} errors={errors} initialTags={tags} />
+                <CustomerForm data={data} setData={setData} errors={errors} initialTags={tags} locations={locations} />
 
                 <div className="mt-6 flex items-center justify-end gap-2">
                     <Link

@@ -1,12 +1,13 @@
 import FormField from '@/Components/FormField';
+import LocationSelect from '@/Components/LocationSelect';
 import { useState } from 'react';
 
 /**
  * Shared form for create + edit. The parent page wires `useForm` and
- * passes `data`, `setData`, `errors`. Tags are managed locally here
- * because they're an array string field.
+ * passes `data`, `setData`, `errors`, and the location tree (Phase 2).
+ * Tags are managed locally here because they're an array string field.
  */
-export default function CustomerForm({ data, setData, errors, initialTags = [] }) {
+export default function CustomerForm({ data, setData, errors, initialTags = [], locations = [] }) {
     const [tagInput, setTagInput] = useState('');
     const tags = data.tags ?? initialTags;
 
@@ -80,29 +81,17 @@ export default function CustomerForm({ data, setData, errors, initialTags = [] }
                 error={errors.email}
             />
 
-            <FormField
-                label="City"
-                name="city"
-                value={data.city}
-                onChange={(v) => setData('city', v)}
-                error={errors.city}
-                required
-            />
-
-            <FormField
-                label="Governorate"
-                name="governorate"
-                value={data.governorate}
-                onChange={(v) => setData('governorate', v)}
-                error={errors.governorate}
-            />
-
-            <FormField
-                label="Country"
-                name="country"
-                value={data.country}
-                onChange={(v) => setData('country', v)}
-                error={errors.country}
+            <LocationSelect
+                locations={locations}
+                country={data.country}
+                state={data.governorate}
+                city={data.city}
+                onChange={({ country, state, city }) => {
+                    setData('country', country);
+                    setData('governorate', state);
+                    setData('city', city);
+                }}
+                errors={{ country: errors.country, state: errors.governorate, city: errors.city }}
                 required
             />
 

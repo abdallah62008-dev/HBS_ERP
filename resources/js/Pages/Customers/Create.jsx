@@ -3,7 +3,10 @@ import PageHeader from '@/Components/PageHeader';
 import CustomerForm from './Form';
 import { Head, useForm, Link } from '@inertiajs/react';
 
-export default function CustomerCreate() {
+export default function CustomerCreate({ locations = [], default_country_code = 'EG' }) {
+    // Map default code → existing English name used by the legacy text columns.
+    const defaultCountryName = (locations.find((c) => c.code === default_country_code)?.name_en) ?? 'Egypt';
+
     const { data, setData, post, processing, errors } = useForm({
         name: '',
         primary_phone: '',
@@ -11,7 +14,7 @@ export default function CustomerCreate() {
         email: '',
         city: '',
         governorate: '',
-        country: 'Egypt',
+        country: defaultCountryName,
         default_address: '',
         customer_type: 'Normal',
         notes: '',
@@ -29,7 +32,7 @@ export default function CustomerCreate() {
             <PageHeader title="New customer" subtitle="Add a customer record" />
 
             <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5">
-                <CustomerForm data={data} setData={setData} errors={errors} />
+                <CustomerForm data={data} setData={setData} errors={errors} locations={locations} />
 
                 <div className="mt-6 flex items-center justify-end gap-2">
                     <Link

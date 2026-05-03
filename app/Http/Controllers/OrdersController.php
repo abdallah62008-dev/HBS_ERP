@@ -57,6 +57,8 @@ class OrdersController extends Controller
                 ->where('status', 'Active')
                 ->orderBy('name')
                 ->get(['id', 'sku', 'name', 'selling_price', 'minimum_selling_price', 'tax_enabled', 'tax_rate']),
+            'locations' => CustomersController::locationTree(),
+            'default_country_code' => \App\Services\SettingsService::get('default_country_code', 'EG'),
         ]);
     }
 

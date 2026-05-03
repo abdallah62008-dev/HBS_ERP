@@ -25,6 +25,7 @@ class DatabaseSeeder extends Seeder
             FiscalYearSeeder::class,
             WarehousesSeeder::class,
             ShippingCompaniesSeeder::class,
+            LocationSeeder::class,
             AdminUserSeeder::class,
         ]);
     }

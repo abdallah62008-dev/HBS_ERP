@@ -4,10 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreCustomerRequest;
 use App\Http\Requests\UpdateCustomerRequest;
+use App\Models\Country;
 use App\Models\Customer;
 use App\Models\CustomerTag;
 use App\Services\AuditLogService;
 use App\Services\CustomerRiskService;
+use App\Services\SettingsService;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Auth;
@@ -57,7 +59,10 @@ class CustomersController extends Controller
 
     public function create(): Response
     {
-        return Inertia::render('Customers/Create');
+        return Inertia::render('Customers/Create', [
+            'locations' => $this->locationTree(),
+            'default_country_code' => SettingsService::get('default_country_code', 'EG'),
+        ]);
     }
 
     public function store(StoreCustomerRequest $request): RedirectResponse|\Illuminate\Http\JsonResponse
@@ -122,6 +127,8 @@ class CustomersController extends Controller
         return Inertia::render('Customers/Edit', [
             'customer' => $customer,
             'tags' => $customer->tags->pluck('tag'),
+            'locations' => $this->locationTree(),
+            'default_country_code' => SettingsService::get('default_country_code', 'EG'),
         ]);
     }
 
@@ -173,6 +180,46 @@ class CustomersController extends Controller
         return redirect()
             ->route('customers.index')
             ->with('success', 'Customer deleted.');
+    }
+
+    /**
+     * Active country → state → city tree used by the create/edit forms
+     * to populate cascading dropdowns. Tiny payload (<10 KB), shipped
+     * inline with the page so the form is reactive without an extra fetch.
+     *
+     * @return array<int, array<string,mixed>>
+     */
+    public static function locationTree(): array
+    {
+        return Country::query()
+            ->where('is_active', true)
+            ->orderBy('sort_order')
+            ->with(['states' => function ($q) {
+                $q->where('is_active', true)
+                    ->orderBy('sort_order')
+                    ->with(['cities' => function ($cq) {
+                        $cq->where('is_active', true)->orderBy('sort_order');
+                    }]);
+            }])
+            ->get()
+            ->map(fn ($country) => [
+                'id' => $country->id,
+                'code' => $country->code,
+                'name_ar' => $country->name_ar,
+                'name_en' => $country->name_en,
+                'states' => $country->states->map(fn ($s) => [
+                    'id' => $s->id,
+                    'name_ar' => $s->name_ar,
+                    'name_en' => $s->name_en,
+                    'type' => $s->type,
+                    'cities' => $s->cities->map(fn ($c) => [
+                        'id' => $c->id,
+                        'name_ar' => $c->name_ar,
+                        'name_en' => $c->name_en,
+                    ])->all(),
+                ])->all(),
+            ])
+            ->all();
     }
 
     /**
