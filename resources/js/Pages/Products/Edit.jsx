@@ -3,7 +3,7 @@ import PageHeader from '@/Components/PageHeader';
 import ProductForm from './Form';
 import { Head, Link, useForm } from '@inertiajs/react';
 
-export default function ProductEdit({ product, categories }) {
+export default function ProductEdit({ product, categories, marketer_tiers = [], tier_prices = {} }) {
     const { data, setData, put, processing, errors } = useForm({
         name: product.name ?? '',
         sku: product.sku ?? '',
@@ -19,6 +19,7 @@ export default function ProductEdit({ product, categories }) {
         reorder_level: product.reorder_level ?? 0,
         status: product.status ?? 'Active',
         price_change_reason: '',
+        tier_prices: tier_prices ?? {},
     });
 
     const submit = (e) => {
@@ -32,7 +33,7 @@ export default function ProductEdit({ product, categories }) {
             <PageHeader title={`Edit ${product.name}`} subtitle={`SKU ${product.sku}`} />
 
             <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5">
-                <ProductForm data={data} setData={setData} errors={errors} categories={categories} isEdit />
+                <ProductForm data={data} setData={setData} errors={errors} categories={categories} marketerTiers={marketer_tiers} isEdit />
 
                 <div className="mt-6 flex items-center justify-end gap-2">
                     <Link href={route('products.show', product.id)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">Cancel</Link>

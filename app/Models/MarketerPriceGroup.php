@@ -9,6 +9,8 @@ class MarketerPriceGroup extends Model
 {
     protected $fillable = [
         'name',
+        'code',
+        'sort_order',
         'description',
         'status',
         'created_by',

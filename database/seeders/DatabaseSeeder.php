@@ -22,6 +22,7 @@ class DatabaseSeeder extends Seeder
             ExpenseCategoriesSeeder::class,
             ReturnReasonsSeeder::class,
             MarketerPriceGroupsSeeder::class,
+            MarketerPriceTiersSeeder::class,
             FiscalYearSeeder::class,
             WarehousesSeeder::class,
             ShippingCompaniesSeeder::class,

@@ -1,6 +1,11 @@
 import FormField from '@/Components/FormField';
 
-export default function ProductForm({ data, setData, errors, categories, isEdit = false }) {
+export default function ProductForm({ data, setData, errors, categories, marketerTiers = [], isEdit = false }) {
+    const updateTierCell = (code, key, value) => {
+        const next = { ...(data.tier_prices ?? {}) };
+        next[code] = { ...(next[code] ?? {}), [key]: value };
+        setData('tier_prices', next);
+    };
     return (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormField label="Name" name="name" value={data.name} onChange={(v) => setData('name', v)} error={errors.name} required />
@@ -76,6 +81,90 @@ export default function ProductForm({ data, setData, errors, categories, isEdit 
                     </select>
                 </FormField>
             </div>
+
+            {/* Phase 5.6 — Marketer pricing tiers */}
+            {marketerTiers.length > 0 && (
+                <div className="sm:col-span-2 rounded-md border border-slate-200 bg-white p-4">
+                    <div className="mb-2 flex items-center justify-between">
+                        <h3 className="text-sm font-semibold text-slate-700">Marketer pricing tiers</h3>
+                        <span className="text-[11px] text-slate-400">Optional · saved per (product, tier)</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full text-xs">
+                            <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                                <tr>
+                                    <th className="px-3 py-2 text-left">Tier</th>
+                                    <th className="px-3 py-2 text-right">Marketer cost price</th>
+                                    <th className="px-3 py-2 text-right">Shipping cost</th>
+                                    <th className="px-3 py-2 text-right">VAT %</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {marketerTiers.map((tier) => {
+                                    const row = (data.tier_prices ?? {})[tier.code] ?? {};
+                                    return (
+                                        <tr key={tier.code}>
+                                            <td className="px-3 py-1.5 font-medium text-slate-700">{tier.name}</td>
+                                            <td className="px-3 py-1.5 text-right">
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min={0}
+                                                    value={row.marketer_cost_price ?? ''}
+                                                    onChange={(e) => updateTierCell(tier.code, 'marketer_cost_price', e.target.value)}
+                                                    className="w-28 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                    aria-label={`${tier.name} marketer cost price`}
+                                                />
+                                                {errors[`tier_prices.${tier.code}.marketer_cost_price`] && (
+                                                    <p className="mt-0.5 text-[10px] text-red-600">
+                                                        {errors[`tier_prices.${tier.code}.marketer_cost_price`]}
+                                                    </p>
+                                                )}
+                                            </td>
+                                            <td className="px-3 py-1.5 text-right">
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min={0}
+                                                    value={row.shipping_cost ?? ''}
+                                                    onChange={(e) => updateTierCell(tier.code, 'shipping_cost', e.target.value)}
+                                                    className="w-28 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                    aria-label={`${tier.name} shipping cost`}
+                                                />
+                                                {errors[`tier_prices.${tier.code}.shipping_cost`] && (
+                                                    <p className="mt-0.5 text-[10px] text-red-600">
+                                                        {errors[`tier_prices.${tier.code}.shipping_cost`]}
+                                                    </p>
+                                                )}
+                                            </td>
+                                            <td className="px-3 py-1.5 text-right">
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min={0}
+                                                    max={100}
+                                                    value={row.vat_percent ?? ''}
+                                                    onChange={(e) => updateTierCell(tier.code, 'vat_percent', e.target.value)}
+                                                    className="w-20 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                    aria-label={`${tier.name} VAT percent`}
+                                                />
+                                                {errors[`tier_prices.${tier.code}.vat_percent`] && (
+                                                    <p className="mt-0.5 text-[10px] text-red-600">
+                                                        {errors[`tier_prices.${tier.code}.vat_percent`]}
+                                                    </p>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                    <p className="mt-2 text-[11px] text-slate-400">
+                        Leave a row empty to skip it. Clearing all three cells on a saved row removes the per-tier entry.
+                    </p>
+                </div>
+            )}
 
             {isEdit && (
                 <FormField

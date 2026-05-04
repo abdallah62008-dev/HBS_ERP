@@ -42,6 +42,13 @@ class UpdateProductRequest extends FormRequest
             'tax_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'reorder_level' => ['nullable', 'integer', 'min:0'],
             'status' => ['nullable', 'in:Active,Inactive,Out of Stock,Discontinued'],
+
+            // Phase 5.6: marketer pricing tiers (optional; per-tier cells
+            // can be empty). Keyed by tier code (A/B/D/E).
+            'tier_prices' => ['nullable', 'array'],
+            'tier_prices.*.marketer_cost_price' => ['nullable', 'numeric', 'min:0'],
+            'tier_prices.*.shipping_cost' => ['nullable', 'numeric', 'min:0'],
+            'tier_prices.*.vat_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
         ];
     }
 }
