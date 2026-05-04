@@ -36,7 +36,8 @@ class Order extends Model
 
     protected $fillable = [
         'order_number', 'fiscal_year_id', 'customer_id', 'marketer_id',
-        'source', 'status', 'collection_status', 'shipping_status',
+        'source', 'external_order_reference', 'entry_code',
+        'status', 'collection_status', 'shipping_status',
         'customer_name', 'customer_phone', 'customer_address',
         'city', 'governorate', 'country',
         'currency_code',
@@ -51,6 +52,8 @@ class Order extends Model
         'delivered_at', 'returned_at',
         'created_by', 'updated_by', 'deleted_by',
     ];
+
+    protected $appends = ['display_order_number'];
 
     protected $casts = [
         'subtotal' => 'decimal:2',
@@ -147,6 +150,28 @@ class Order extends Model
     public function shippedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'shipped_by');
+    }
+
+    /* Accessors */
+
+    /**
+     * Display order number = `order_number` + "-" + `entry_code` when an
+     * entry code is present (e.g. "ORD-2026-000123-AH"). Falls back to
+     * the bare `order_number` for orders created before the entry-code
+     * feature shipped, or for orders whose creator had no entry_code and
+     * no name to derive initials from.
+     *
+     * Computed at render time — no `display_order_number` column exists.
+     * The original `order_number` is never modified.
+     */
+    public function getDisplayOrderNumberAttribute(): ?string
+    {
+        if (! $this->order_number) {
+            return null;
+        }
+        return $this->entry_code
+            ? "{$this->order_number}-{$this->entry_code}"
+            : $this->order_number;
     }
 
     /* Scopes */

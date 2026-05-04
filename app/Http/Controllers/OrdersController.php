@@ -32,10 +32,27 @@ class OrdersController extends Controller
             ->forCurrentMarketer()
             ->with('customer:id,name,primary_phone')
             ->when($filters['q'] ?? null, function ($q, $term) {
-                $q->where(function ($w) use ($term) {
+                $term = trim($term);
+                // Phase 5.4: support display-number search like
+                // "ORD-2026-000123-AH" by splitting at the entry-code
+                // suffix and matching order_number + entry_code together.
+                $orderNumberPart = $term;
+                $entryCodePart = null;
+                if (preg_match('/^(.+-\d{4,}-\d+)-(.+)$/', $term, $matches)) {
+                    $orderNumberPart = $matches[1];
+                    $entryCodePart = $matches[2];
+                }
+                $q->where(function ($w) use ($term, $orderNumberPart, $entryCodePart) {
                     $w->where('order_number', 'like', "%{$term}%")
+                        ->orWhere('external_order_reference', 'like', "%{$term}%")
                         ->orWhere('customer_name', 'like', "%{$term}%")
                         ->orWhere('customer_phone', 'like', "%{$term}%");
+                    if ($entryCodePart !== null) {
+                        $w->orWhere(function ($d) use ($orderNumberPart, $entryCodePart) {
+                            $d->where('order_number', $orderNumberPart)
+                                ->where('entry_code', $entryCodePart);
+                        });
+                    }
                 });
             })
             ->when($filters['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
@@ -52,7 +69,7 @@ class OrdersController extends Controller
         ]);
     }
 
-    public function create(): Response
+    public function create(Request $request): Response
     {
         return Inertia::render('Orders/Create', [
             'products' => $this->productsForOrderEntry(),
@@ -62,7 +79,39 @@ class OrdersController extends Controller
                 ->get(['id', 'name', 'parent_id']),
             'locations' => CustomersController::locationTree(),
             'default_country_code' => \App\Services\SettingsService::get('default_country_code', 'EG'),
+            // Phase 5.4: server-computed preview of the entry_code the
+            // OrderService will stamp on the new order. Only valid for the
+            // staff-creates-order path (no marketer_id selected); marketer-
+            // created orders override with marketers.code at save time.
+            'entry_code_preview' => $this->previewEntryCode($request->user()),
         ]);
+    }
+
+    /**
+     * Frontend preview of the entry_code that the OrderService would assign
+     * for a staff-created order. Mirrors OrderService::resolveEntryCode for
+     * the "no marketer" case so the read-only field on the Create Order
+     * page shows the right value before submit.
+     */
+    private function previewEntryCode($user): ?string
+    {
+        if (! $user) return null;
+        if ($user->entry_code) {
+            return mb_substr((string) $user->entry_code, 0, 16);
+        }
+        if ($user->name) {
+            $words = preg_split('/\s+/u', trim($user->name));
+            $initials = '';
+            foreach ($words as $word) {
+                $clean = preg_replace('/[^A-Za-z0-9]/u', '', $word);
+                if ($clean !== '') {
+                    $initials .= mb_strtoupper(mb_substr($clean, 0, 1));
+                }
+            }
+            $initials = mb_substr($initials, 0, 16);
+            return $initials !== '' ? $initials : null;
+        }
+        return null;
     }
 
     /**

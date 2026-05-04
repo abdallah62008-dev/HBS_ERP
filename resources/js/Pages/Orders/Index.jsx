@@ -96,7 +96,7 @@ export default function OrdersIndex({ orders, filters, statuses }) {
                 <input
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
-                    placeholder="Search by order #, name, or phone…"
+                    placeholder="Search by order #, display # (with -code), external ref, name, or phone…"
                     className="flex-1 rounded-md border-slate-300 text-sm"
                 />
                 <button type="submit" className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white">
@@ -109,6 +109,7 @@ export default function OrdersIndex({ orders, filters, statuses }) {
                     <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
                         <tr>
                             <th className="px-4 py-2.5">Order</th>
+                            <th className="px-4 py-2.5">External ref</th>
                             <th className="px-4 py-2.5">Customer</th>
                             <th className="px-4 py-2.5">City</th>
                             <th className="px-4 py-2.5 text-right">Total</th>
@@ -119,19 +120,22 @@ export default function OrdersIndex({ orders, filters, statuses }) {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                         {orders.data.length === 0 && (
-                            <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-slate-400">No orders match.</td></tr>
+                            <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-slate-400">No orders match.</td></tr>
                         )}
                         {orders.data.map((o) => (
                             <tr key={o.id} className="hover:bg-slate-50">
                                 <td className="px-4 py-2.5">
                                     <Link href={route('orders.show', o.id)} className="font-mono text-xs font-medium text-slate-700 hover:text-indigo-600">
-                                        {o.order_number}
+                                        {o.display_order_number ?? o.order_number}
                                     </Link>
                                     {o.duplicate_score >= 50 && (
                                         <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800" title="Possible duplicate">
                                             DUP {o.duplicate_score}
                                         </span>
                                     )}
+                                </td>
+                                <td className="px-4 py-2.5 font-mono text-xs text-slate-500">
+                                    {o.external_order_reference || <span className="text-slate-300">—</span>}
                                 </td>
                                 <td className="px-4 py-2.5">
                                     <div className="font-medium text-slate-800">{o.customer_name}</div>

@@ -59,12 +59,19 @@ class OrderService
 
         return DB::transaction(function () use ($payload) {
             $userId = Auth::id();
+            $user = Auth::user();
 
             $customer = $this->resolveCustomer($payload, $userId);
 
             $fiscalYear = FiscalYear::where('status', 'Open')
                 ->latest('start_date')
                 ->firstOrFail();
+
+            // Phase 5.4: derive entry_code at create time from
+            //   1) marketer.code if order has a marketer_id
+            //   2) user.entry_code on the creator
+            //   3) initials from the creator's name (uppercase, alphanum-only, max 16)
+            $entryCode = $this->resolveEntryCode($payload['marketer_id'] ?? null, $user);
 
             // Compute profit math from items BEFORE persisting so the row
             // has correct totals at INSERT time (no follow-up UPDATE).
@@ -96,6 +103,8 @@ class OrderService
                 'customer_id' => $customer->id,
                 'marketer_id' => $payload['marketer_id'] ?? null,
                 'source' => $payload['source'] ?? null,
+                'external_order_reference' => $payload['external_order_reference'] ?? null,
+                'entry_code' => $entryCode,
                 'status' => 'New',
                 'collection_status' => 'Not Collected',
                 'shipping_status' => 'Not Shipped',
@@ -397,6 +406,49 @@ class OrderService
     /**
      * @param  array<string,mixed>  $payload
      */
+    /**
+     * Phase 5.4: derive the entry code stored on the order at create time.
+     *
+     * Precedence:
+     *   1) If the order is linked to a marketer, use marketers.code.
+     *   2) Else if the creator has users.entry_code set, use it.
+     *   3) Else fall back to initials from the creator's name (uppercase,
+     *      alphanumeric only, max 16 chars).
+     *   4) If everything is blank (e.g. no auth user), return null — the
+     *      order saves cleanly and `display_order_number` falls back to
+     *      the bare `order_number`.
+     */
+    private function resolveEntryCode(?int $marketerId, ?\App\Models\User $user): ?string
+    {
+        if ($marketerId) {
+            $code = \App\Models\Marketer::query()
+                ->where('id', $marketerId)
+                ->value('code');
+            if ($code) {
+                return mb_substr((string) $code, 0, 16);
+            }
+        }
+
+        if ($user?->entry_code) {
+            return mb_substr((string) $user->entry_code, 0, 16);
+        }
+
+        if ($user?->name) {
+            $words = preg_split('/\s+/u', trim($user->name));
+            $initials = '';
+            foreach ($words as $word) {
+                $clean = preg_replace('/[^A-Za-z0-9]/u', '', $word);
+                if ($clean !== '') {
+                    $initials .= mb_strtoupper(mb_substr($clean, 0, 1));
+                }
+            }
+            $initials = mb_substr($initials, 0, 16);
+            return $initials !== '' ? $initials : null;
+        }
+
+        return null;
+    }
+
     private function resolveCustomer(array $payload, ?int $userId): Customer
     {
         if (! empty($payload['customer_id'])) {

@@ -38,12 +38,12 @@ export default function OrderShow({ order, statuses }) {
     };
 
     return (
-        <AuthenticatedLayout header={order.order_number}>
-            <Head title={order.order_number} />
+        <AuthenticatedLayout header={order.display_order_number ?? order.order_number}>
+            <Head title={order.display_order_number ?? order.order_number} />
 
             <PageHeader
-                title={<span className="font-mono">{order.order_number}</span>}
-                subtitle={`${order.customer_name} · ${order.customer_phone}`}
+                title={<span className="font-mono">{order.display_order_number ?? order.order_number}</span>}
+                subtitle={`${order.customer_name} · ${order.customer_phone}${order.external_order_reference ? ` · Ext: ${order.external_order_reference}` : ''}`}
                 actions={
                     <div className="flex gap-2">
                         <Link href={route('orders.timeline', order.id)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50">
@@ -128,6 +128,16 @@ export default function OrderShow({ order, statuses }) {
                                 </>
                             )}
                         </dl>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 bg-white p-5 space-y-3">
+                        <h2 className="text-sm font-semibold text-slate-700">References</h2>
+                        <Field label="Internal order #" value={<span className="font-mono">{order.order_number}</span>} />
+                        <Field label="Display #" value={<span className="font-mono">{order.display_order_number ?? order.order_number}</span>} />
+                        <Field label="External reference" value={order.external_order_reference || <span className="text-slate-400">—</span>} />
+                        <Field label="Entry code" value={order.entry_code ? <span className="font-mono">{order.entry_code}</span> : <span className="text-slate-400">—</span>} />
+                        <Field label="Source" value={order.source || <span className="text-slate-400">—</span>} />
+                        <Field label="Entered by" value={order.created_by?.name ?? order.createdBy?.name ?? <span className="text-slate-400">—</span>} />
                     </div>
 
                     <div className="rounded-lg border border-slate-200 bg-white p-5 space-y-3">

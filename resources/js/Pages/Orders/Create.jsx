@@ -7,7 +7,7 @@ import useCan from '@/Hooks/useCan';
 import { Head, Link, useForm, usePage, router } from '@inertiajs/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-export default function OrderCreate({ products, categories = [], locations = [], default_country_code = 'EG' }) {
+export default function OrderCreate({ products, categories = [], locations = [], default_country_code = 'EG', entry_code_preview = null }) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
     const can = useCan();
@@ -33,6 +33,7 @@ export default function OrderCreate({ products, categories = [], locations = [],
         governorate: '',
         country: defaultCountryName,
         source: '',
+        external_order_reference: '',
         notes: '',
         internal_notes: '',
         discount_amount: 0,
@@ -347,6 +348,35 @@ export default function OrderCreate({ products, categories = [], locations = [],
                             )}
                         </>
                     )}
+                </section>
+
+                {/* Order details — initial status, external ref, entry code (Phase 5.4) */}
+                <section className="rounded-lg border border-slate-200 bg-white p-5">
+                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Order details</h2>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700">Initial status</label>
+                            <div className="mt-1 inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-700">
+                                New
+                            </div>
+                            <p className="mt-1 text-[11px] text-slate-400">Status changes happen after the order is created.</p>
+                        </div>
+                        <FormField
+                            label="External order reference"
+                            name="external_order_reference"
+                            value={data.external_order_reference}
+                            onChange={(v) => setData('external_order_reference', v)}
+                            error={errors.external_order_reference}
+                            hint="Optional · website / marketplace order id (e.g. WEB-10295)"
+                        />
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700">Entered by (entry code)</label>
+                            <div className="mt-1 inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-xs text-slate-700">
+                                {entry_code_preview ?? '—'}
+                            </div>
+                            <p className="mt-1 text-[11px] text-slate-400">Auto-detected. Marketer orders use the marketer&apos;s code.</p>
+                        </div>
+                    </div>
                 </section>
 
                 {/* Shipping address */}

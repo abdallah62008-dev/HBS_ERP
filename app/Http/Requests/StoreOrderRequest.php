@@ -32,6 +32,7 @@ class StoreOrderRequest extends FormRequest
             'country' => ['required', 'string', 'max:255'],
 
             'source' => ['nullable', 'string', 'max:64'],
+            'external_order_reference' => ['nullable', 'string', 'max:64'],
             'notes' => ['nullable', 'string'],
             'internal_notes' => ['nullable', 'string'],
 
