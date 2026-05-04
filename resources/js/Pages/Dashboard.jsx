@@ -12,7 +12,7 @@ import { Head, Link, usePage } from '@inertiajs/react';
 
 /* ────────────────────── Building blocks ────────────────────── */
 
-function KpiCard({ label, value, hint, deltaText, deltaTone, accent }) {
+function KpiCard({ label, value, hint, deltaText, deltaTone, accent, href }) {
     const accentColors = {
         slate: 'border-slate-200',
         emerald: 'border-emerald-200',
@@ -25,9 +25,16 @@ function KpiCard({ label, value, hint, deltaText, deltaTone, accent }) {
         down: 'text-red-600',
         flat: 'text-slate-400',
     };
-    return (
-        <div className={'rounded-lg border bg-white p-4 shadow-sm ' + (accentColors[accent] ?? accentColors.slate)}>
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</div>
+    const baseClass = 'block rounded-lg border bg-white p-4 shadow-sm transition ' + (accentColors[accent] ?? accentColors.slate);
+    const interactiveClass = href ? ' hover:-translate-y-0.5 hover:border-slate-300 hover:shadow' : '';
+    const body = (
+        <>
+            <div className="flex items-start justify-between gap-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</div>
+                {href && (
+                    <span className="text-[11px] text-slate-400" aria-hidden>→</span>
+                )}
+            </div>
             <div className="mt-1.5 text-2xl font-semibold tabular-nums text-slate-900">{value}</div>
             <div className="mt-1 flex items-center gap-2 text-[11px]">
                 {deltaText && (
@@ -35,8 +42,11 @@ function KpiCard({ label, value, hint, deltaText, deltaTone, accent }) {
                 )}
                 {hint && <span className="text-slate-400">{hint}</span>}
             </div>
-        </div>
+        </>
     );
+    return href
+        ? <Link href={href} className={baseClass + interactiveClass}>{body}</Link>
+        : <div className={baseClass}>{body}</div>;
 }
 
 function deltaParts(curr, prev) {
@@ -196,9 +206,14 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                         {user?.role?.name} · {props.app?.country} · {props.app?.currency_code}
                     </p>
                 </div>
+                <p className="text-xs text-slate-400">
+                    {new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                </p>
             </div>
 
-            {/* KPI cards */}
+            {/* KPI cards. Each card links to the most useful detail page
+                when the user has permission to view it; otherwise renders
+                as a static tile. */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 <KpiCard
                     label="Orders today"
@@ -206,6 +221,7 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                     deltaText={orders.text}
                     deltaTone={orders.tone}
                     accent="indigo"
+                    href={can('orders.view') ? route('orders.index') : undefined}
                 />
                 <KpiCard
                     label="Sales today"
@@ -213,45 +229,55 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                     deltaText={sales.text}
                     deltaTone={sales.tone}
                     accent="emerald"
+                    href={can('reports.sales') ? route('reports.sales') : undefined}
                 />
                 <KpiCard
                     label="Collections today"
                     value={<Money value={kpis?.collections_today_amount} sym={sym} />}
                     hint={(kpis?.collections_today_count ?? 0) + ' collected'}
                     accent="emerald"
+                    href={can('collections.view') ? route('collections.index') : undefined}
                 />
                 <KpiCard
                     label="Pending orders"
                     value={kpis?.pending_orders ?? 0}
                     hint="New + Pending Conf. + Confirmed"
+                    href={can('orders.view') ? route('orders.index') : undefined}
                 />
                 <KpiCard
                     label="Ready to pack"
                     value={kpis?.ready_to_pack ?? 0}
+                    hint="Awaiting packing"
+                    href={can('shipping.view') ? route('shipping.ready-to-pack') : undefined}
                 />
                 <KpiCard
                     label="Ready to ship"
                     value={kpis?.ready_to_ship ?? 0}
                     hint="Packed + Ready to Ship"
+                    href={can('shipping.view') ? route('shipping.ready-to-ship') : undefined}
                 />
                 <KpiCard
                     label="Delayed shipments"
                     value={kpis?.delayed_shipments ?? 0}
                     accent={kpis?.delayed_shipments > 0 ? 'red' : 'slate'}
+                    href={can('shipping.view') ? route('shipping.delayed') : undefined}
                 />
                 <KpiCard
                     label="Returns today"
                     value={kpis?.returns_today ?? 0}
+                    href={can('returns.view') ? route('returns.index') : undefined}
                 />
                 <KpiCard
                     label="Low stock products"
                     value={kpis?.low_stock_products ?? 0}
                     accent={kpis?.low_stock_products > 0 ? 'amber' : 'slate'}
+                    href={can('inventory.view') ? route('inventory.low-stock') : undefined}
                 />
                 <KpiCard
                     label="Active customers (MTD)"
                     value={kpis?.active_customers_this_month ?? 0}
                     hint="Distinct customers"
+                    href={can('customers.view') ? route('customers.index') : undefined}
                 />
             </div>
 
@@ -329,7 +355,7 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                             </table>
                         </div>
                     ) : (
-                        <div className="p-4"><EmptyState text="No orders yet" /></div>
+                        <div className="p-4"><EmptyState text="No orders yet — create your first one." /></div>
                     )}
                 </Card>
 
@@ -360,7 +386,7 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                             </table>
                         </div>
                     ) : (
-                        <div className="p-4"><EmptyState text="All products above reorder level" /></div>
+                        <div className="p-4"><EmptyState text="All products above their reorder level — nothing to restock." /></div>
                     )}
                 </Card>
             </div>
