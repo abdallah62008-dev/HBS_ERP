@@ -173,15 +173,41 @@ export default function OrderCreate({ products, categories = [], locations = [],
         return list.slice(0, 25);
     }, [products, categoryFilter, searchQuery]);
 
-    /* Live totals */
+    /* Live totals — mirror what the backend computes per-line so the
+       Review Total panel matches the saved order down to the kobo. */
     const totals = useMemo(() => {
         let subtotal = 0;
+        let tax = 0;
         for (const it of data.items) {
-            subtotal += (Number(it.unit_price) * Number(it.quantity)) - Number(it.discount_amount || 0);
+            const product = products.find((p) => Number(p.id) === Number(it.product_id));
+            const lineGross = (Number(it.unit_price) * Number(it.quantity)) - Number(it.discount_amount || 0);
+            const lineSubtotal = Math.max(0, lineGross);
+            subtotal += lineSubtotal;
+            if (product?.tax_enabled) {
+                tax += lineSubtotal * (Number(product.tax_rate || 0) / 100);
+            }
         }
-        const total = Math.max(0, subtotal + Number(data.shipping_amount || 0) + Number(data.extra_fees || 0) - Number(data.discount_amount || 0));
-        return { subtotal: subtotal.toFixed(2), total: total.toFixed(2) };
-    }, [data.items, data.shipping_amount, data.extra_fees, data.discount_amount]);
+        const shipping = Number(data.shipping_amount || 0);
+        const discount = Number(data.discount_amount || 0);
+        const extra = Number(data.extra_fees || 0);
+        const total = Math.max(0, subtotal + tax + shipping + extra - discount);
+        return {
+            subtotal: subtotal.toFixed(2),
+            tax: tax.toFixed(2),
+            shipping: shipping.toFixed(2),
+            discount: discount.toFixed(2),
+            extra: extra.toFixed(2),
+            total: total.toFixed(2),
+            hasTax: tax > 0,
+        };
+    }, [data.items, products, data.shipping_amount, data.extra_fees, data.discount_amount]);
+
+    /* Submit gate: require a customer (existing or inline name+phone) AND at least one item. */
+    const customerReady = data.customer_id
+        ? true
+        : (data.customer.name?.trim() && data.customer.primary_phone?.trim());
+    const itemsReady = data.items.length > 0;
+    const canSubmit = !processing && customerReady && itemsReady;
 
     const useExistingCustomer = () => {
         if (!matchedCustomer) return;
@@ -233,19 +259,38 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     </div>
 
                     {data.customer_id && matchedCustomer ? (
-                        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <div className="text-sm font-semibold text-slate-800">{matchedCustomer.name}</div>
-                                    <div className="text-xs text-slate-600">{matchedCustomer.primary_phone}</div>
-                                    <div className="mt-1 flex items-center gap-1.5">
+                        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-200 text-[11px] font-semibold text-emerald-800">
+                                            ✓
+                                        </span>
+                                        <div className="text-sm font-semibold text-slate-800">{matchedCustomer.name}</div>
+                                    </div>
+                                    <div className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs text-slate-600 sm:grid-cols-2">
+                                        <div>📞 {matchedCustomer.primary_phone}</div>
+                                        {matchedCustomer.secondary_phone && <div>📞 {matchedCustomer.secondary_phone}</div>}
+                                        {matchedCustomer.email && <div>✉ {matchedCustomer.email}</div>}
+                                        {matchedCustomer.city && <div>📍 {matchedCustomer.city}{matchedCustomer.governorate ? `, ${matchedCustomer.governorate}` : ''}</div>}
+                                    </div>
+                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                         <StatusBadge value={matchedCustomer.customer_type} />
                                         <StatusBadge value={matchedCustomer.risk_level} />
-                                        <span className="text-xs text-slate-500">{matchedCustomer.orders_count ?? 0} orders · {matchedCustomer.returned_orders_count ?? 0} returned</span>
+                                        <span className="text-[11px] text-slate-500">
+                                            {matchedCustomer.orders_count ?? 0} orders · {matchedCustomer.returned_orders_count ?? 0} returned
+                                        </span>
                                     </div>
                                 </div>
-                                <button type="button" onClick={() => { setData('customer_id', null); }} className="text-xs text-slate-500 hover:underline">
-                                    Use a different customer
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setData('customer_id', null);
+                                        setMatchedCustomer(null);
+                                    }}
+                                    className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+                                >
+                                    Use different customer
                                 </button>
                             </div>
                         </div>
@@ -304,9 +349,9 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     )}
                 </section>
 
-                {/* Shipping snapshot */}
+                {/* Shipping address */}
                 <section className="rounded-lg border border-slate-200 bg-white p-5">
-                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Delivery address</h2>
+                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Shipping address</h2>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <FormField
                             label="Address"
@@ -340,9 +385,9 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     </div>
                 </section>
 
-                {/* Items */}
+                {/* Product selection */}
                 <section className="rounded-lg border border-slate-200 bg-white p-5">
-                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Items</h2>
+                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Product selection</h2>
 
                     {/* Product entry toolbar: category filter + search + scan */}
                     <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-12">
@@ -442,6 +487,15 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     </div>
 
                     {/* Selected order items */}
+                    <div className="mt-5 mb-2 flex items-center justify-between">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Order items</h3>
+                        {data.items.length > 0 && (
+                            <span className="text-[11px] text-slate-400">
+                                {data.items.length} item{data.items.length === 1 ? '' : 's'} ·
+                                {' '}{data.items.reduce((acc, it) => acc + Number(it.quantity || 0), 0)} units
+                            </span>
+                        )}
+                    </div>
                     {data.items.length === 0 ? (
                         <div className="rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
                             No items yet — search or scan above to add the first one.
@@ -524,19 +578,48 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     {errors.items && <p className="mt-2 text-xs text-red-600">{errors.items}</p>}
                 </section>
 
-                {/* Totals + adjustments */}
+                {/* Shipping & Fees */}
                 <section className="rounded-lg border border-slate-200 bg-white p-5">
-                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Totals</h2>
+                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Shipping &amp; fees</h2>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                        <FormField label="Discount" name="discount_amount" type="number" value={data.discount_amount} onChange={(v) => setData('discount_amount', v)} error={errors.discount_amount} />
                         <FormField label="Shipping" name="shipping_amount" type="number" value={data.shipping_amount} onChange={(v) => setData('shipping_amount', v)} error={errors.shipping_amount} />
+                        <FormField label="Discount" name="discount_amount" type="number" value={data.discount_amount} onChange={(v) => setData('discount_amount', v)} error={errors.discount_amount} />
                         <FormField label="Extra fees" name="extra_fees" type="number" value={data.extra_fees} onChange={(v) => setData('extra_fees', v)} error={errors.extra_fees} />
                     </div>
+                </section>
 
-                    <div className="mt-4 flex items-center justify-end gap-6 text-sm">
-                        <div className="text-slate-500">Subtotal: <span className="tabular-nums text-slate-800">{sym}{totals.subtotal}</span></div>
-                        <div className="text-base font-semibold text-slate-800">Total: <span className="tabular-nums">{sym}{totals.total}</span></div>
-                    </div>
+                {/* Review Total — read-only summary mirroring the backend math */}
+                <section className="rounded-lg border border-slate-200 bg-white p-5">
+                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Review total</h2>
+                    <dl className="space-y-1.5 text-sm">
+                        <div className="flex justify-between">
+                            <dt className="text-slate-500">Subtotal</dt>
+                            <dd className="tabular-nums text-slate-800">{sym}{totals.subtotal}</dd>
+                        </div>
+                        {totals.hasTax && (
+                            <div className="flex justify-between">
+                                <dt className="text-slate-500">Tax</dt>
+                                <dd className="tabular-nums text-slate-800">{sym}{totals.tax}</dd>
+                            </div>
+                        )}
+                        <div className="flex justify-between">
+                            <dt className="text-slate-500">Shipping</dt>
+                            <dd className="tabular-nums text-slate-800">{sym}{totals.shipping}</dd>
+                        </div>
+                        <div className="flex justify-between">
+                            <dt className="text-slate-500">Discount</dt>
+                            <dd className="tabular-nums text-red-700">−{sym}{totals.discount}</dd>
+                        </div>
+                        <div className="flex justify-between">
+                            <dt className="text-slate-500">Extra fees</dt>
+                            <dd className="tabular-nums text-slate-800">{sym}{totals.extra}</dd>
+                        </div>
+                        <div className="my-1 border-t border-slate-200" />
+                        <div className="flex justify-between text-base">
+                            <dt className="font-semibold text-slate-800">Grand total</dt>
+                            <dd className="font-semibold tabular-nums text-slate-900">{sym}{totals.total}</dd>
+                        </div>
+                    </dl>
                 </section>
 
                 {/* Notes */}
@@ -581,14 +664,28 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     </div>
                 )}
 
-                <div className="flex items-center justify-end gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                    {!canSubmit && !processing && (
+                        <span className="text-xs text-slate-500">
+                            {!customerReady && !itemsReady && 'Add a customer and at least one item to continue.'}
+                            {!customerReady && itemsReady && 'Pick or add a customer to continue.'}
+                            {customerReady && !itemsReady && 'Add at least one item to continue.'}
+                        </span>
+                    )}
                     <Link href={route('orders.index')} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">Cancel</Link>
                     <button
                         type="submit"
-                        disabled={processing}
-                        className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+                        disabled={!canSubmit}
+                        title={!canSubmit ? 'Complete customer + add items first' : ''}
+                        className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        {processing ? 'Saving…' : 'Create order'}
+                        {processing && (
+                            <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+                                <circle cx="12" cy="12" r="10" opacity="0.25" />
+                                <path d="M22 12a10 10 0 0 1-10 10" strokeLinecap="round" />
+                            </svg>
+                        )}
+                        <span>{processing ? 'Saving…' : 'Create order'}</span>
                     </button>
                 </div>
             </form>
@@ -629,11 +726,21 @@ export default function OrderCreate({ products, categories = [], locations = [],
 
 /**
  * Inline modal for creating a customer without leaving the order form.
+ *
+ * UX (Phase 4):
+ *   - autoFocus on Name field so operators can start typing immediately
+ *   - debounced phone-lookup → if a customer with that phone already
+ *     exists, the modal switches to a "Customer already exists" panel
+ *     with a one-click "Use existing customer" action that hands the
+ *     existing record back to the parent (no duplicate created)
+ *   - notes field added (optional)
+ *   - submitting button shows a spinner-style label + disables itself
+ *   - inline field validation rendered via FormField error props
+ *
  * POSTs to `/customers` with an Accept: application/json header — the
  * controller (CustomersController::store) returns the created customer
  * as JSON in that case. RBAC is enforced by the same `permission:customers.create`
- * middleware on the route, so this UI is only reachable for users who
- * could already create customers via /customers/create.
+ * middleware on the route.
  */
 function QuickCustomerModal({ initial, onClose, onCreated, locations = [] }) {
     const [form, setForm] = useState({
@@ -645,15 +752,45 @@ function QuickCustomerModal({ initial, onClose, onCreated, locations = [] }) {
         city: initial.city ?? '',
         country: initial.country ?? 'Egypt',
         default_address: initial.default_address ?? '',
+        notes: '',
     });
     const [errors, setErrors] = useState({});
     const [submitting, setSubmitting] = useState(false);
     const [generalError, setGeneralError] = useState(null);
+    const [duplicateMatch, setDuplicateMatch] = useState(null);
+    const nameInputRef = useRef(null);
 
     const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+    // Autofocus the name input when the modal mounts.
+    useEffect(() => {
+        const t = setTimeout(() => nameInputRef.current?.focus(), 50);
+        return () => clearTimeout(t);
+    }, []);
+
+    // Debounced duplicate-phone check using the existing /customers/lookup
+    // endpoint. Runs as the operator types; clears as soon as the phone
+    // changes back to a non-matching value.
+    useEffect(() => {
+        const phone = (form.primary_phone || '').trim();
+        if (phone.length < 4) {
+            setDuplicateMatch(null);
+            return;
+        }
+        const timer = setTimeout(() => {
+            fetch(`${route('customers.lookup')}?phone=${encodeURIComponent(phone)}`, {
+                headers: { Accept: 'application/json' },
+            })
+                .then((r) => (r.ok ? r.json() : { customer: null }))
+                .then((j) => setDuplicateMatch(j.customer))
+                .catch(() => setDuplicateMatch(null));
+        }, 400);
+        return () => clearTimeout(timer);
+    }, [form.primary_phone]);
+
     const submit = async (e) => {
         e.preventDefault();
+        if (submitting) return;
         setSubmitting(true);
         setErrors({});
         setGeneralError(null);
@@ -712,8 +849,40 @@ function QuickCustomerModal({ initial, onClose, onCreated, locations = [] }) {
                     </div>
 
                     <div className="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-2">
-                        <FormField label="Name" name="name" value={form.name} onChange={(v) => update('name', v)} error={errors.name?.[0]} required />
+                        <FormField label="Name" name="name" error={errors.name?.[0]} required>
+                            <input
+                                ref={nameInputRef}
+                                id="name"
+                                type="text"
+                                value={form.name}
+                                onChange={(e) => update('name', e.target.value)}
+                                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm"
+                                autoComplete="off"
+                            />
+                        </FormField>
                         <FormField label="Primary phone" name="primary_phone" value={form.primary_phone} onChange={(v) => update('primary_phone', v)} error={errors.primary_phone?.[0]} required />
+
+                        {/* Duplicate-phone banner — shows BEFORE the operator
+                            invests further effort. Spans both columns. */}
+                        {duplicateMatch && (
+                            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 sm:col-span-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <strong>Customer already exists:</strong>{' '}
+                                        <span className="font-semibold">{duplicateMatch.name}</span>{' '}
+                                        <span className="text-amber-700">· {duplicateMatch.primary_phone}</span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => onCreated(duplicateMatch)}
+                                        className="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
+                                    >
+                                        Use existing customer
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
                         <FormField label="Secondary phone" name="secondary_phone" value={form.secondary_phone} onChange={(v) => update('secondary_phone', v)} error={errors.secondary_phone?.[0]} />
                         <FormField label="Email" type="email" name="email" value={form.email} onChange={(v) => update('email', v)} error={errors.email?.[0]} />
                         <LocationSelect
@@ -731,12 +900,21 @@ function QuickCustomerModal({ initial, onClose, onCreated, locations = [] }) {
                             }}
                             required
                         />
-                        <FormField label="Address" name="default_address" error={errors.default_address?.[0]} required className="sm:col-span-2">
+                        <FormField label="Detailed address" name="default_address" error={errors.default_address?.[0]} required className="sm:col-span-2">
                             <textarea
                                 id="default_address"
                                 rows={2}
                                 value={form.default_address}
                                 onChange={(e) => update('default_address', e.target.value)}
+                                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm"
+                            />
+                        </FormField>
+                        <FormField label="Notes (optional)" name="notes" error={errors.notes?.[0]} className="sm:col-span-2">
+                            <textarea
+                                id="notes"
+                                rows={2}
+                                value={form.notes}
+                                onChange={(e) => update('notes', e.target.value)}
                                 className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm"
                             />
                         </FormField>
@@ -758,10 +936,16 @@ function QuickCustomerModal({ initial, onClose, onCreated, locations = [] }) {
                         </button>
                         <button
                             type="submit"
-                            disabled={submitting}
-                            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+                            disabled={submitting || !!duplicateMatch}
+                            className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
                         >
-                            {submitting ? 'Saving…' : 'Save & select'}
+                            {submitting && (
+                                <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+                                    <circle cx="12" cy="12" r="10" opacity="0.25" />
+                                    <path d="M22 12a10 10 0 0 1-10 10" strokeLinecap="round" />
+                                </svg>
+                            )}
+                            <span>{submitting ? 'Saving…' : 'Save & select'}</span>
                         </button>
                     </div>
                 </form>
