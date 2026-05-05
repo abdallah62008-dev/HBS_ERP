@@ -49,6 +49,8 @@ class UpdateProductRequest extends FormRequest
             'tier_prices.*.marketer_cost_price' => ['nullable', 'numeric', 'min:0'],
             'tier_prices.*.shipping_cost' => ['nullable', 'numeric', 'min:0'],
             'tier_prices.*.vat_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'tier_prices.*.collection_cost' => ['nullable', 'numeric', 'min:0'],
+            'tier_prices.*.return_cost' => ['nullable', 'numeric', 'min:0'],
         ];
     }
 }

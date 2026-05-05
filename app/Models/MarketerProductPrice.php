@@ -11,6 +11,7 @@ class MarketerProductPrice extends Model
         'marketer_price_group_id', 'product_id', 'product_variant_id',
         'trade_price', 'minimum_selling_price',
         'shipping_cost', 'vat_percent',
+        'collection_cost', 'return_cost',
         'created_by', 'updated_by',
     ];
 
@@ -19,6 +20,8 @@ class MarketerProductPrice extends Model
         'minimum_selling_price' => 'decimal:2',
         'shipping_cost' => 'decimal:2',
         'vat_percent' => 'decimal:2',
+        'collection_cost' => 'decimal:2',
+        'return_cost' => 'decimal:2',
     ];
 
     public function priceGroup(): BelongsTo

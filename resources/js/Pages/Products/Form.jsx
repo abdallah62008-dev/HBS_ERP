@@ -1,5 +1,36 @@
 import FormField from '@/Components/FormField';
 
+const VAT_DEFAULT = 14;
+
+const formatMoney = (n) => {
+    if (n === null || n === undefined || Number.isNaN(n)) return '—';
+    return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+const computeExpectedProfit = (sellingPrice, row) => {
+    const sp = parseFloat(sellingPrice);
+    if (!Number.isFinite(sp) || sp <= 0) return null;
+    const cost = parseFloat(row.marketer_cost_price);
+    const shipping = parseFloat(row.shipping_cost);
+    // VAT defaults to 14 when blank — matches backend syncTierPrices().
+    const vatRaw = row.vat_percent;
+    const vat = vatRaw === '' || vatRaw === null || vatRaw === undefined
+        ? VAT_DEFAULT
+        : parseFloat(vatRaw);
+    const hasAny = [
+        row.marketer_cost_price,
+        row.shipping_cost,
+        row.collection_cost,
+        row.return_cost,
+    ].some((v) => v !== '' && v !== null && v !== undefined);
+    if (!hasAny) return null;
+    const vatAmount = sp * ((Number.isFinite(vat) ? vat : 0) / 100);
+    return sp
+        - vatAmount
+        - (Number.isFinite(cost) ? cost : 0)
+        - (Number.isFinite(shipping) ? shipping : 0);
+};
+
 export default function ProductForm({ data, setData, errors, categories, marketerTiers = [], isEdit = false }) {
     const updateTierCell = (code, key, value) => {
         const next = { ...(data.tier_prices ?? {}) };
@@ -87,21 +118,25 @@ export default function ProductForm({ data, setData, errors, categories, markete
                 <div className="sm:col-span-2 rounded-md border border-slate-200 bg-white p-4">
                     <div className="mb-2 flex items-center justify-between">
                         <h3 className="text-sm font-semibold text-slate-700">Marketer pricing tiers</h3>
-                        <span className="text-[11px] text-slate-400">Optional · saved per (product, tier)</span>
+                        <span className="text-[11px] text-slate-400">Optional · saved per (product, tier) · VAT defaults to {VAT_DEFAULT}%</span>
                     </div>
                     <div className="overflow-x-auto">
                         <table className="min-w-full text-xs">
                             <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
                                 <tr>
                                     <th className="px-3 py-2 text-left">Tier</th>
-                                    <th className="px-3 py-2 text-right">Marketer cost price</th>
+                                    <th className="px-3 py-2 text-right">Cost price</th>
                                     <th className="px-3 py-2 text-right">Shipping cost</th>
                                     <th className="px-3 py-2 text-right">VAT %</th>
+                                    <th className="px-3 py-2 text-right">Collection cost</th>
+                                    <th className="px-3 py-2 text-right">Return cost</th>
+                                    <th className="px-3 py-2 text-right">Expected profit</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                                 {marketerTiers.map((tier) => {
                                     const row = (data.tier_prices ?? {})[tier.code] ?? {};
+                                    const expected = computeExpectedProfit(data.selling_price, row);
                                     return (
                                         <tr key={tier.code}>
                                             <td className="px-3 py-1.5 font-medium text-slate-700">{tier.name}</td>
@@ -112,7 +147,7 @@ export default function ProductForm({ data, setData, errors, categories, markete
                                                     min={0}
                                                     value={row.marketer_cost_price ?? ''}
                                                     onChange={(e) => updateTierCell(tier.code, 'marketer_cost_price', e.target.value)}
-                                                    className="w-28 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                    className="w-24 rounded-md border-slate-300 text-right text-xs tabular-nums"
                                                     aria-label={`${tier.name} marketer cost price`}
                                                 />
                                                 {errors[`tier_prices.${tier.code}.marketer_cost_price`] && (
@@ -128,7 +163,7 @@ export default function ProductForm({ data, setData, errors, categories, markete
                                                     min={0}
                                                     value={row.shipping_cost ?? ''}
                                                     onChange={(e) => updateTierCell(tier.code, 'shipping_cost', e.target.value)}
-                                                    className="w-28 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                    className="w-24 rounded-md border-slate-300 text-right text-xs tabular-nums"
                                                     aria-label={`${tier.name} shipping cost`}
                                                 />
                                                 {errors[`tier_prices.${tier.code}.shipping_cost`] && (
@@ -143,6 +178,7 @@ export default function ProductForm({ data, setData, errors, categories, markete
                                                     step="0.01"
                                                     min={0}
                                                     max={100}
+                                                    placeholder={String(VAT_DEFAULT)}
                                                     value={row.vat_percent ?? ''}
                                                     onChange={(e) => updateTierCell(tier.code, 'vat_percent', e.target.value)}
                                                     className="w-20 rounded-md border-slate-300 text-right text-xs tabular-nums"
@@ -154,6 +190,44 @@ export default function ProductForm({ data, setData, errors, categories, markete
                                                     </p>
                                                 )}
                                             </td>
+                                            <td className="px-3 py-1.5 text-right">
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min={0}
+                                                    value={row.collection_cost ?? ''}
+                                                    onChange={(e) => updateTierCell(tier.code, 'collection_cost', e.target.value)}
+                                                    className="w-24 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                    aria-label={`${tier.name} collection cost`}
+                                                />
+                                                {errors[`tier_prices.${tier.code}.collection_cost`] && (
+                                                    <p className="mt-0.5 text-[10px] text-red-600">
+                                                        {errors[`tier_prices.${tier.code}.collection_cost`]}
+                                                    </p>
+                                                )}
+                                            </td>
+                                            <td className="px-3 py-1.5 text-right">
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min={0}
+                                                    value={row.return_cost ?? ''}
+                                                    onChange={(e) => updateTierCell(tier.code, 'return_cost', e.target.value)}
+                                                    className="w-24 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                    aria-label={`${tier.name} return cost`}
+                                                />
+                                                {errors[`tier_prices.${tier.code}.return_cost`] && (
+                                                    <p className="mt-0.5 text-[10px] text-red-600">
+                                                        {errors[`tier_prices.${tier.code}.return_cost`]}
+                                                    </p>
+                                                )}
+                                            </td>
+                                            <td
+                                                className={`px-3 py-1.5 text-right tabular-nums ${expected === null ? 'text-slate-400' : expected < 0 ? 'text-red-600' : 'text-emerald-700'}`}
+                                                aria-label={`${tier.name} expected profit`}
+                                            >
+                                                {expected === null ? '—' : formatMoney(expected)}
+                                            </td>
                                         </tr>
                                     );
                                 })}
@@ -161,7 +235,7 @@ export default function ProductForm({ data, setData, errors, categories, markete
                         </table>
                     </div>
                     <p className="mt-2 text-[11px] text-slate-400">
-                        Leave a row empty to skip it. Clearing all three cells on a saved row removes the per-tier entry.
+                        Leave a tier&apos;s cells empty to skip it. Clearing every cell of a saved row removes it. Collection &amp; return costs are stored for visibility — they are not subtracted from the expected profit preview.
                     </p>
                 </div>
             )}

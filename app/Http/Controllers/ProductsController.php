@@ -109,6 +109,8 @@ class ProductsController extends Controller
                 'marketer_cost_price' => $r->trade_price,
                 'shipping_cost' => $r->shipping_cost,
                 'vat_percent' => $r->vat_percent,
+                'collection_cost' => $r->collection_cost,
+                'return_cost' => $r->return_cost,
             ]])
             ->all();
 
@@ -166,14 +168,16 @@ class ProductsController extends Controller
      *
      * - Each row is keyed on (product_id, marketer_price_group_id) — the
      *   join already enforces uniqueness via product_id + group + variant.
-     * - If all three numeric fields for a tier are empty/null, the row is
-     *   deleted (clean slate). This matches "save row only if at least
-     *   one value exists" from the brief.
+     * - If every numeric field for a tier is empty/null, the row is
+     *   deleted (clean slate). Matches "save row only if at least one
+     *   value exists" from the brief.
+     * - VAT % defaults to 14 when at least one other field is present and
+     *   the user did not enter a VAT explicitly.
      * - The product's variant column is left null because tier pricing in
      *   this phase is product-level only; per-variant tier pricing is a
      *   future enhancement.
      *
-     * @param  array<string, array{marketer_cost_price?:mixed, shipping_cost?:mixed, vat_percent?:mixed}>  $tierPrices
+     * @param  array<string, array{marketer_cost_price?:mixed, shipping_cost?:mixed, vat_percent?:mixed, collection_cost?:mixed, return_cost?:mixed}>  $tierPrices
      */
     private function syncTierPrices(Product $product, array $tierPrices): void
     {
@@ -190,8 +194,11 @@ class ProductsController extends Controller
             $cost = $this->numberOrNull($row['marketer_cost_price'] ?? null);
             $shipping = $this->numberOrNull($row['shipping_cost'] ?? null);
             $vat = $this->numberOrNull($row['vat_percent'] ?? null);
+            $collection = $this->numberOrNull($row['collection_cost'] ?? null);
+            $return = $this->numberOrNull($row['return_cost'] ?? null);
 
-            $allEmpty = $cost === null && $shipping === null && $vat === null;
+            $allEmpty = $cost === null && $shipping === null && $vat === null
+                && $collection === null && $return === null;
             $key = [
                 'product_id' => $product->id,
                 'marketer_price_group_id' => $tier->id,
@@ -213,7 +220,9 @@ class ProductsController extends Controller
                 'trade_price' => $cost ?? 0,
                 'minimum_selling_price' => 0,
                 'shipping_cost' => $shipping,
-                'vat_percent' => $vat,
+                'vat_percent' => $vat ?? 14,
+                'collection_cost' => $collection,
+                'return_cost' => $return,
                 'created_by' => Auth::id(),
                 'updated_by' => Auth::id(),
             ]);
