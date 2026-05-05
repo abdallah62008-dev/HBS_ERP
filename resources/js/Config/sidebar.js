@@ -170,6 +170,8 @@ export const sidebarSections = [
         title: 'Administration',
         icon: I.cog,
         items: [
+            { label: 'Users', href: '/users', icon: I.users, permission: 'users.manage' },
+            { label: 'Roles & Permissions', href: '/roles', icon: I.check, permission: 'roles.manage' },
             { label: 'Staff & Targets', href: '/staff/targets', icon: I.target, permission: 'users.manage' },
             { label: 'Approval Requests', href: '/approvals', icon: I.check, permission: 'approvals.manage' },
             { label: 'Notifications', href: '/notifications', icon: I.bell },

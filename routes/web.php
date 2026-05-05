@@ -383,6 +383,19 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::post('/notifications/mark-all-read', [NotificationsController::class, 'markAllRead'])->name('notifications.mark-all-read');
     Route::middleware('permission:notifications.manage')->post('/notifications/refresh', [NotificationsController::class, 'refresh'])->name('notifications.refresh');
 
+    /* ─────────────── Users + Roles admin (Phase 6.1) ─────────────── */
+    Route::middleware('permission:users.manage')->get('/users', [\App\Http\Controllers\UsersController::class, 'index'])->name('users.index');
+    Route::middleware('permission:users.manage')->get('/users/create', [\App\Http\Controllers\UsersController::class, 'create'])->name('users.create');
+    Route::middleware('permission:users.manage')->post('/users', [\App\Http\Controllers\UsersController::class, 'store'])->name('users.store');
+    Route::middleware('permission:users.manage')->get('/users/{user}/edit', [\App\Http\Controllers\UsersController::class, 'edit'])->name('users.edit');
+    Route::middleware('permission:users.manage')->put('/users/{user}', [\App\Http\Controllers\UsersController::class, 'update'])->name('users.update');
+    Route::middleware('permission:users.manage')->put('/users/{user}/permissions', [\App\Http\Controllers\UsersController::class, 'syncOverrides'])->name('users.permissions.sync');
+    Route::middleware('permission:users.manage')->delete('/users/{user}', [\App\Http\Controllers\UsersController::class, 'destroy'])->name('users.destroy');
+
+    Route::middleware('permission:roles.manage')->get('/roles', [\App\Http\Controllers\RolesController::class, 'index'])->name('roles.index');
+    Route::middleware('permission:roles.manage')->get('/roles/{role}/edit', [\App\Http\Controllers\RolesController::class, 'edit'])->name('roles.edit');
+    Route::middleware('permission:roles.manage')->put('/roles/{role}', [\App\Http\Controllers\RolesController::class, 'update'])->name('roles.update');
+
     /* ─────────────── Audit logs viewer (Phase 6) ─────────────── */
     Route::middleware('permission:audit_logs.view')->get('/audit-logs', [AuditLogsController::class, 'index'])->name('audit-logs.index');
     Route::middleware('permission:audit_logs.view')->get('/audit-logs/{log}', [AuditLogsController::class, 'show'])->name('audit-logs.show');
