@@ -37,7 +37,7 @@ class MarketersController extends Controller
         $filters = $request->only(['q', 'status', 'price_group_id']);
 
         $marketers = Marketer::query()
-            ->with(['user:id,name,email', 'priceGroup:id,name', 'wallet'])
+            ->with(['user:id,name,email', 'priceGroup:id,name', 'priceTier:id,code,name', 'wallet'])
             ->when($filters['q'] ?? null, function ($q, $term) {
                 $q->where(function ($w) use ($term) {
                     $w->where('code', 'like', "%{$term}%")
@@ -62,6 +62,7 @@ class MarketersController extends Controller
     {
         return Inertia::render('Marketers/Create', [
             'price_groups' => MarketerPriceGroup::where('status', 'Active')->orderBy('name')->get(['id', 'name']),
+            'marketer_tiers' => $this->marketerTiers(),
         ]);
     }
 
@@ -93,6 +94,7 @@ class MarketersController extends Controller
                     'user_id' => $user->id,
                     'code' => $data['code'],
                     'price_group_id' => $data['price_group_id'],
+                    'marketer_price_tier_id' => $data['marketer_price_tier_id'] ?? null,
                     'phone' => $data['phone'] ?? null,
                     'status' => $data['status'] ?? 'Active',
                     'shipping_deducted' => $data['shipping_deducted'] ?? true,
@@ -119,7 +121,7 @@ class MarketersController extends Controller
 
     public function show(Marketer $marketer): Response
     {
-        $marketer->load(['user:id,name,email', 'priceGroup', 'wallet']);
+        $marketer->load(['user:id,name,email', 'priceGroup', 'priceTier:id,code,name', 'wallet']);
         $this->wallet->ensureWallet($marketer);
 
         $recentTx = MarketerTransaction::where('marketer_id', $marketer->id)
@@ -140,6 +142,7 @@ class MarketersController extends Controller
         return Inertia::render('Marketers/Edit', [
             'marketer' => $marketer,
             'price_groups' => MarketerPriceGroup::where('status', 'Active')->orderBy('name')->get(['id', 'name']),
+            'marketer_tiers' => $this->marketerTiers(),
         ]);
     }
 
@@ -156,6 +159,30 @@ class MarketersController extends Controller
         AuditLogService::logModelChange($marketer, 'updated', 'marketers');
 
         return redirect()->route('marketers.show', $marketer)->with('success', 'Marketer updated.');
+    }
+
+    /**
+     * Active tier rows (Phase 5.6 codes A/B/D/E) for the marketer create/edit
+     * dropdown. Distinct from `price_groups` (which still includes legacy
+     * Bronze/Silver/Gold/VIP groups used by per-(group, product) pricing).
+     *
+     * @return array<int, array{id:int, code:string, name:string, sort_order:int}>
+     */
+    private function marketerTiers(): array
+    {
+        return MarketerPriceGroup::query()
+            ->whereNotNull('code')
+            ->where('status', 'Active')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['id', 'code', 'name', 'sort_order'])
+            ->map(fn ($g) => [
+                'id' => (int) $g->id,
+                'code' => $g->code,
+                'name' => $g->name,
+                'sort_order' => (int) ($g->sort_order ?? 0),
+            ])
+            ->all();
     }
 
     /**

@@ -10,7 +10,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class Marketer extends Model
 {
     protected $fillable = [
-        'user_id', 'code', 'price_group_id', 'phone', 'status',
+        'user_id', 'code', 'price_group_id', 'marketer_price_tier_id',
+        'phone', 'status',
         'shipping_deducted', 'tax_deducted', 'commission_after_delivery_only',
         'settlement_cycle', 'notes',
         'created_by', 'updated_by',
@@ -30,6 +31,11 @@ class Marketer extends Model
     public function priceGroup(): BelongsTo
     {
         return $this->belongsTo(MarketerPriceGroup::class, 'price_group_id');
+    }
+
+    public function priceTier(): BelongsTo
+    {
+        return $this->belongsTo(MarketerPriceGroup::class, 'marketer_price_tier_id');
     }
 
     public function orders(): HasMany

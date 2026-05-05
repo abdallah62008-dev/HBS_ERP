@@ -3,11 +3,12 @@ import PageHeader from '@/Components/PageHeader';
 import FormField from '@/Components/FormField';
 import { Head, Link, useForm } from '@inertiajs/react';
 
-export default function MarketerCreate({ price_groups }) {
+export default function MarketerCreate({ price_groups, marketer_tiers = [] }) {
     const { data, setData, post, processing, errors } = useForm({
         user: { name: '', email: '', password: '' },
         code: '',
         price_group_id: price_groups[0]?.id ?? '',
+        marketer_price_tier_id: marketer_tiers[0]?.id ?? '',
         phone: '',
         status: 'Active',
         shipping_deducted: true,
@@ -43,6 +44,18 @@ export default function MarketerCreate({ price_groups }) {
                             <select id="price_group_id" value={data.price_group_id} onChange={(e) => setData('price_group_id', e.target.value)} className="mt-1 block w-full rounded-md border-slate-300 text-sm">
                                 {price_groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                             </select>
+                        </FormField>
+                        <FormField label="Pricing tier" name="marketer_price_tier_id" error={errors.marketer_price_tier_id} hint="Drives Phase 5.6 product tier prices for this marketer.">
+                            {marketer_tiers.length === 0 ? (
+                                <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                    No marketer pricing tiers found. Please run seeders.
+                                </p>
+                            ) : (
+                                <select id="marketer_price_tier_id" value={data.marketer_price_tier_id ?? ''} onChange={(e) => setData('marketer_price_tier_id', e.target.value || null)} className="mt-1 block w-full rounded-md border-slate-300 text-sm">
+                                    <option value="">— None —</option>
+                                    {marketer_tiers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                </select>
+                            )}
                         </FormField>
                         <FormField label="Settlement cycle" name="settlement_cycle" error={errors.settlement_cycle}>
                             <select id="settlement_cycle" value={data.settlement_cycle} onChange={(e) => setData('settlement_cycle', e.target.value)} className="mt-1 block w-full rounded-md border-slate-300 text-sm">

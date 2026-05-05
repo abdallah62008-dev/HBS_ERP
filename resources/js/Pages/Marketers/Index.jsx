@@ -62,6 +62,7 @@ export default function MarketersIndex({ marketers, filters, price_groups }) {
                             <th className="px-4 py-2.5">Code</th>
                             <th className="px-4 py-2.5">Name</th>
                             <th className="px-4 py-2.5">Group</th>
+                            <th className="px-4 py-2.5">Tier</th>
                             <th className="px-4 py-2.5 text-right">Orders</th>
                             <th className="px-4 py-2.5 text-right">Earned</th>
                             <th className="px-4 py-2.5 text-right">Balance</th>
@@ -70,7 +71,7 @@ export default function MarketersIndex({ marketers, filters, price_groups }) {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                         {marketers.data.length === 0 && (
-                            <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-slate-400">No marketers yet.</td></tr>
+                            <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-slate-400">No marketers yet.</td></tr>
                         )}
                         {marketers.data.map((m) => (
                             <tr key={m.id} className="hover:bg-slate-50">
@@ -82,6 +83,11 @@ export default function MarketersIndex({ marketers, filters, price_groups }) {
                                     <div className="text-xs text-slate-500">{m.user?.email}</div>
                                 </td>
                                 <td className="px-4 py-2.5 text-slate-600">{m.price_group?.name}</td>
+                                <td className="px-4 py-2.5 text-slate-600">
+                                    {m.price_tier
+                                        ? <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">{m.price_tier.name}</span>
+                                        : <span className="text-xs text-slate-400">—</span>}
+                                </td>
                                 <td className="px-4 py-2.5 text-right tabular-nums">{m.orders_count}</td>
                                 <td className="px-4 py-2.5 text-right tabular-nums">{sym}{fmt(m.wallet?.total_earned)}</td>
                                 <td className="px-4 py-2.5 text-right tabular-nums font-medium">{sym}{fmt(m.wallet?.balance)}</td>
