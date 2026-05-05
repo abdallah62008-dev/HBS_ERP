@@ -120,6 +120,8 @@ Route::middleware(['auth', 'active'])->group(function () {
 
     Route::middleware('permission:orders.create')->post('/orders/check-duplicate', [OrdersController::class, 'checkDuplicate'])
         ->name('orders.check-duplicate');
+    Route::middleware('permission:orders.create')->post('/orders/marketer-profit-preview', [OrdersController::class, 'marketerProfitPreview'])
+        ->name('orders.marketer-profit-preview');
 
     Route::middleware('permission:orders.view')->get('/orders', [OrdersController::class, 'index'])
         ->name('orders.index');

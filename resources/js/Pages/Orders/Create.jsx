@@ -7,7 +7,7 @@ import useCan from '@/Hooks/useCan';
 import { Head, Link, useForm, usePage, router } from '@inertiajs/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-export default function OrderCreate({ products, categories = [], locations = [], default_country_code = 'EG', entry_code_preview = null }) {
+export default function OrderCreate({ products, categories = [], locations = [], default_country_code = 'EG', entry_code_preview = null, marketers = [] }) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
     const can = useCan();
@@ -41,6 +41,8 @@ export default function OrderCreate({ products, categories = [], locations = [],
         // customer's profile (or sensible defaults for inline customers).
         customer_phone_secondary: '',
         customer_phone_whatsapp: true,
+        // Phase 5.9: optional marketer attachment for admin-created orders.
+        marketer_id: null,
         source: '',
         external_order_reference: '',
         notes: '',
@@ -51,6 +53,9 @@ export default function OrderCreate({ products, categories = [], locations = [],
         items: [],
         duplicate_acknowledged: false,
     });
+
+    /* Phase 5.9 — live marketer profit preview state */
+    const [marketerProfit, setMarketerProfit] = useState(null);
 
     /* Lookup customer by phone (debounced) */
     useEffect(() => {
@@ -95,6 +100,44 @@ export default function OrderCreate({ products, categories = [], locations = [],
         }, 600);
         return () => clearTimeout(timer);
     }, [data.customer.primary_phone, data.customer.name, data.customer_id, data.city, data.customer_address, JSON.stringify(data.items.map((i) => i.product_id))]);
+
+    /* Phase 5.9: live marketer profit preview when a marketer is selected
+       and at least one item is in the cart. Re-fetches on debounce when
+       any of (marketer_id, items, prices) changes. */
+    useEffect(() => {
+        if (!data.marketer_id || data.items.length === 0) {
+            setMarketerProfit(null);
+            return;
+        }
+        const validItems = data.items.filter((i) => i.product_id && Number(i.quantity) > 0 && Number(i.unit_price) >= 0);
+        if (validItems.length === 0) {
+            setMarketerProfit(null);
+            return;
+        }
+        const timer = setTimeout(() => {
+            fetch(route('orders.marketer-profit-preview'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-XSRF-TOKEN': decodeURIComponent(document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] ?? ''),
+                },
+                body: JSON.stringify({
+                    marketer_id: data.marketer_id,
+                    items: validItems.map((i) => ({
+                        product_id: i.product_id,
+                        product_variant_id: i.product_variant_id ?? null,
+                        quantity: Number(i.quantity),
+                        unit_price: Number(i.unit_price),
+                    })),
+                }),
+            })
+                .then((r) => r.json())
+                .then((j) => setMarketerProfit(j))
+                .catch(() => setMarketerProfit(null));
+        }, 400);
+        return () => clearTimeout(timer);
+    }, [data.marketer_id, JSON.stringify(data.items.map((i) => `${i.product_id}-${i.quantity}-${i.unit_price}`))]);
 
     /* Item helpers */
     const updateItem = (idx, key, value) => {
@@ -430,7 +473,7 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     )}
                 </section>
 
-                {/* Order details — initial status, external ref, entry code, source (Phase 5.4 + 5.8) */}
+                {/* Order details — initial status, external ref, entry code, source, marketer (Phase 5.4 + 5.8 + 5.9) */}
                 <section className="rounded-lg border border-slate-200 bg-white p-5">
                     <h2 className="mb-3 text-sm font-semibold text-slate-700">Order details</h2>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -457,6 +500,74 @@ export default function OrderCreate({ products, categories = [], locations = [],
                             <p className="mt-1 text-[11px] text-slate-400">Auto-detected. Marketer orders use the marketer&apos;s code.</p>
                         </div>
                         <FormField label="Source" name="source" value={data.source} onChange={(v) => setData('source', v)} error={errors.source} hint="e.g. Facebook, TikTok, Walk-in" />
+                        {/* Phase 5.9 — admin-only "On behalf of marketer" picker. Drives the live profit preview. */}
+                        <FormField
+                            label="On behalf of marketer"
+                            name="marketer_id"
+                            error={errors.marketer_id}
+                            hint="Optional · enables the Phase 5.9 marketer profit preview"
+                            className="lg:col-span-2"
+                        >
+                            <select
+                                id="marketer_id"
+                                value={data.marketer_id ?? ''}
+                                onChange={(e) => setData('marketer_id', e.target.value || null)}
+                                className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                            >
+                                <option value="">— None (admin-side order) —</option>
+                                {marketers.map((m) => (
+                                    <option key={m.id} value={m.id}>
+                                        {m.code} — {m.name ?? '(no name)'}{m.tier_name ? ` · ${m.tier_name}` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        </FormField>
+                        {/* Marketer profit preview block (Phase 5.9). Only renders once a marketer + items are present. */}
+                        {marketerProfit && marketerProfit.lines && (
+                            <div className="lg:col-span-2 rounded-md border border-emerald-200 bg-emerald-50 p-3">
+                                <div className="flex items-center justify-between text-xs font-semibold text-emerald-800">
+                                    <span>Marketer profit preview</span>
+                                    <span className="font-mono text-sm">{sym}{Number(marketerProfit.total ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                                <div className="mt-1.5 text-[11px] text-emerald-700">
+                                    {marketerProfit.marketer?.code}
+                                    {marketerProfit.marketer?.tier ? ` · Tier ${marketerProfit.marketer.tier}` : ''}
+                                    {' · '}
+                                    {marketerProfit.lines.length} line{marketerProfit.lines.length === 1 ? '' : 's'}
+                                </div>
+                                <details className="mt-2">
+                                    <summary className="cursor-pointer text-[11px] text-emerald-700 hover:text-emerald-900">Per-line breakdown</summary>
+                                    <table className="mt-1 w-full text-[11px] tabular-nums">
+                                        <thead className="text-emerald-700">
+                                            <tr>
+                                                <th className="text-left">#</th>
+                                                <th className="text-right">qty</th>
+                                                <th className="text-right">price</th>
+                                                <th className="text-right">cost</th>
+                                                <th className="text-right">ship</th>
+                                                <th className="text-right">VAT%</th>
+                                                <th className="text-right">profit</th>
+                                                <th className="text-left pl-2">src</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {marketerProfit.lines.map((l, idx) => (
+                                                <tr key={idx} className="text-emerald-900">
+                                                    <td>{idx + 1}</td>
+                                                    <td className="text-right">{l.quantity}</td>
+                                                    <td className="text-right">{l.unit_price.toFixed(2)}</td>
+                                                    <td className="text-right">{l.cost_price.toFixed(2)}</td>
+                                                    <td className="text-right">{l.shipping_cost.toFixed(2)}</td>
+                                                    <td className="text-right">{l.vat_percent.toFixed(2)}</td>
+                                                    <td className="text-right font-semibold">{l.profit.toFixed(2)}</td>
+                                                    <td className="pl-2 text-[10px] text-emerald-700">{l.source}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </details>
+                            </div>
+                        )}
                     </div>
                 </section>
 

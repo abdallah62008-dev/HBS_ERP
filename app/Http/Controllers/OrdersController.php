@@ -84,6 +84,20 @@ class OrdersController extends Controller
             // staff-creates-order path (no marketer_id selected); marketer-
             // created orders override with marketers.code at save time.
             'entry_code_preview' => $this->previewEntryCode($request->user()),
+            // Phase 5.9: marketer list for the optional "On behalf of"
+            // picker — drives the marketer-profit preview.
+            'marketers' => \App\Models\Marketer::query()
+                ->where('status', 'Active')
+                ->with(['user:id,name', 'priceTier:id,code,name'])
+                ->orderBy('code')
+                ->get(['id', 'code', 'user_id', 'marketer_price_tier_id'])
+                ->map(fn ($m) => [
+                    'id' => $m->id,
+                    'code' => $m->code,
+                    'name' => $m->user?->name,
+                    'tier_name' => $m->priceTier?->name,
+                ])
+                ->all(),
         ]);
     }
 
@@ -374,6 +388,71 @@ class OrdersController extends Controller
         ]);
 
         return response()->json($this->duplicateService->evaluate($data));
+    }
+
+    /**
+     * Phase 5.9 — AJAX preview of marketer profit for the in-progress
+     * Order Create payload. Used by the "Marketer profit preview"
+     * widget in resources/js/Pages/Orders/Create.jsx so the operator
+     * sees the resolved tier cost / shipping / VAT live as they edit.
+     *
+     * Returns the per-line breakdown plus a total. NULL when the
+     * marketer or items aren't supplied yet.
+     */
+    public function marketerProfitPreview(
+        Request $request,
+        \App\Services\MarketerPricingResolver $resolver,
+    ) {
+        $data = $request->validate([
+            'marketer_id' => ['required', 'exists:marketers,id'],
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.product_id' => ['required', 'exists:products,id'],
+            'items.*.product_variant_id' => ['nullable', 'exists:product_variants,id'],
+            'items.*.quantity' => ['required', 'integer', 'min:1'],
+            'items.*.unit_price' => ['required', 'numeric', 'min:0'],
+        ]);
+
+        $marketer = \App\Models\Marketer::with('priceTier:id,code,name', 'priceGroup:id,name')
+            ->findOrFail($data['marketer_id']);
+
+        $lines = [];
+        $total = 0.0;
+        foreach ($data['items'] as $item) {
+            $resolved = $resolver->resolveForItem(
+                $marketer,
+                (int) $item['product_id'],
+                ! empty($item['product_variant_id']) ? (int) $item['product_variant_id'] : null,
+            );
+            $profit = $resolver->profitForItem(
+                unitPrice: (float) $item['unit_price'],
+                quantity: (int) $item['quantity'],
+                costPrice: $resolved['cost_price'],
+                shippingCost: $resolved['shipping_cost'],
+                vatPercent: $resolved['vat_percent'],
+            );
+            $total += $profit;
+            $lines[] = [
+                'product_id' => (int) $item['product_id'],
+                'quantity' => (int) $item['quantity'],
+                'unit_price' => (float) $item['unit_price'],
+                'cost_price' => $resolved['cost_price'],
+                'shipping_cost' => $resolved['shipping_cost'],
+                'vat_percent' => $resolved['vat_percent'],
+                'source' => $resolved['source'],
+                'profit' => $profit,
+            ];
+        }
+
+        return response()->json([
+            'marketer' => [
+                'id' => $marketer->id,
+                'code' => $marketer->code,
+                'tier' => $marketer->priceTier?->name,
+                'group' => $marketer->priceGroup?->name,
+            ],
+            'lines' => $lines,
+            'total' => round($total, 2),
+        ]);
     }
 
     /**

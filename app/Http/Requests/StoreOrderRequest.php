@@ -40,6 +40,10 @@ class StoreOrderRequest extends FormRequest
             'customer_phone_secondary' => ['nullable', 'string', 'max:32'],
             'customer_phone_whatsapp' => ['nullable', 'boolean'],
 
+            // Phase 5.9: admin can attach an order to a marketer at
+            // create-time to drive marketer-specific profit calculation.
+            'marketer_id' => ['nullable', 'exists:marketers,id'],
+
             'source' => ['nullable', 'string', 'max:64'],
             'external_order_reference' => ['nullable', 'string', 'max:64'],
             'notes' => ['nullable', 'string'],

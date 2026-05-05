@@ -1,9 +1,11 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import FormField from '@/Components/FormField';
-import { Head, Link, useForm } from '@inertiajs/react';
+import { Head, Link, useForm, usePage } from '@inertiajs/react';
 
 export default function OrderEdit({ order, statuses }) {
+    const { props } = usePage();
+    const sym = props.app?.currency_symbol ?? '';
     const { data, setData, put, processing, errors } = useForm({
         customer_address: order.customer_address ?? '',
         city: order.city ?? '',
@@ -64,6 +66,20 @@ export default function OrderEdit({ order, statuses }) {
                         </label>
                     </div>
                 </section>
+
+                {order.marketer_id && order.marketer_profit !== null && (
+                    <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-5">
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-sm font-semibold text-emerald-800">Marketer profit (Phase 5.9 snapshot)</h2>
+                            <span className="font-mono text-base font-semibold text-emerald-900">
+                                {sym}{Number(order.marketer_profit).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-emerald-700">
+                            Calculated at create-time from selling price minus VAT, marketer cost, and shipping (per line). Stored snapshot — does not recalculate when product tier prices later change.
+                        </p>
+                    </section>
+                )}
 
                 <section className="rounded-lg border border-slate-200 bg-white p-5">
                     <h2 className="mb-3 text-sm font-semibold text-slate-700">Adjustments</h2>

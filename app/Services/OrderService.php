@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Customer;
 use App\Models\FiscalYear;
+use App\Models\Marketer;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderStatusHistory;
@@ -42,6 +43,7 @@ class OrderService
         private readonly ShippingChecklistService $shippingChecklist,
         private readonly MarketerWalletService $marketerWallet,
         private readonly ProfitGuardService $profitGuard,
+        private readonly MarketerPricingResolver $marketerPricing,
     ) {}
 
     /**
@@ -75,12 +77,19 @@ class OrderService
 
             // Compute profit math from items BEFORE persisting so the row
             // has correct totals at INSERT time (no follow-up UPDATE).
-            $itemsData = $this->buildItemRows($payload['items']);
+            // Phase 5.9: when the order has a marketer, the per-item
+            // marketer cost/shipping/VAT are resolved through the tier
+            // chain (specific → tier → product default).
+            $marketer = ! empty($payload['marketer_id'])
+                ? Marketer::find($payload['marketer_id'])
+                : null;
+            $itemsData = $this->buildItemRows($payload['items'], $marketer);
             $totals = $this->computeTotals(
                 $itemsData,
                 discount: (float) ($payload['discount_amount'] ?? 0),
                 shipping: (float) ($payload['shipping_amount'] ?? 0),
                 extra: (float) ($payload['extra_fees'] ?? 0),
+                marketer: $marketer,
             );
 
             // Duplicate detection snapshot.
@@ -314,7 +323,7 @@ class OrderService
      * @param  array<int, array<string,mixed>>  $items
      * @return array<int, array<string,mixed>>
      */
-    private function buildItemRows(array $items): array
+    private function buildItemRows(array $items, ?Marketer $marketer = null): array
     {
         $rows = [];
 
@@ -327,9 +336,27 @@ class OrderService
 
             $unitPrice = (float) $item['unit_price'];
             $unitCost = (float) ($variant->cost_price ?? $product->cost_price);
-            $tradePrice = (float) ($variant->marketer_trade_price ?? $product->marketer_trade_price);
             $quantity = (int) $item['quantity'];
             $discount = (float) ($item['discount_amount'] ?? 0);
+
+            // Phase 5.9: resolve cost/shipping/VAT through the tier chain
+            // when this order is for a marketer. Without a marketer the
+            // legacy product-default cost still applies and shipping/VAT
+            // stay null on the order item snapshot (no marketer profit).
+            if ($marketer) {
+                $resolved = $this->marketerPricing->resolveForItem(
+                    $marketer,
+                    $product->id,
+                    $variant?->id,
+                );
+                $tradePrice = $resolved['cost_price'];
+                $marketerShipping = $resolved['shipping_cost'];
+                $marketerVat = $resolved['vat_percent'];
+            } else {
+                $tradePrice = (float) ($variant->marketer_trade_price ?? $product->marketer_trade_price);
+                $marketerShipping = null;
+                $marketerVat = null;
+            }
 
             $taxRate = (float) ($product->tax_enabled ? $product->tax_rate : 0);
             $lineSubtotal = max(0, ($unitPrice * $quantity) - $discount);
@@ -348,6 +375,8 @@ class OrderService
                 'total_price' => $totalPrice,
                 'unit_cost' => $unitCost,
                 'marketer_trade_price' => $tradePrice,
+                'marketer_shipping_cost' => $marketerShipping,
+                'marketer_vat_percent' => $marketerVat,
             ];
         }
 
@@ -358,18 +387,37 @@ class OrderService
      * @param  array<int, array<string,mixed>>  $items
      * @return array<string, float>
      */
-    private function computeTotals(array $items, float $discount, float $shipping, float $extra): array
-    {
+    private function computeTotals(
+        array $items,
+        float $discount,
+        float $shipping,
+        float $extra,
+        ?Marketer $marketer = null,
+    ): array {
         $subtotal = 0.0;
         $taxTotal = 0.0;
         $costTotal = 0.0;
         $tradeTotal = 0.0;
+        $marketerProfit = 0.0;
 
         foreach ($items as $row) {
             $subtotal += ($row['unit_price'] * $row['quantity']) - $row['discount_amount'];
             $taxTotal += $row['tax_amount'];
             $costTotal += $row['unit_cost'] * $row['quantity'];
             $tradeTotal += $row['marketer_trade_price'] * $row['quantity'];
+
+            // Phase 5.9: per-line marketer profit when a marketer is
+            // attached. Uses the resolved tier shipping + VAT (or legacy
+            // group / product-default fallbacks captured in buildItemRows).
+            if ($marketer && $row['marketer_vat_percent'] !== null) {
+                $marketerProfit += $this->marketerPricing->profitForItem(
+                    unitPrice: (float) $row['unit_price'],
+                    quantity: (int) $row['quantity'],
+                    costPrice: (float) $row['marketer_trade_price'],
+                    shippingCost: (float) ($row['marketer_shipping_cost'] ?? 0),
+                    vatPercent: (float) $row['marketer_vat_percent'],
+                );
+            }
         }
 
         $total = max(0, $subtotal + $taxTotal + $shipping + $extra - $discount);
@@ -391,6 +439,10 @@ class OrderService
             'marketer_trade_total' => round($tradeTotal, 2),
             'gross_profit' => round($gross, 2),
             'net_profit' => round($net, 2),
+            // Phase 5.9: order-level marketer profit. NULL when there is
+            // no marketer attached so historic non-marketer orders aren't
+            // misread as zero-profit marketer orders.
+            'marketer_profit' => $marketer ? round($marketerProfit, 2) : null,
         ];
     }
 

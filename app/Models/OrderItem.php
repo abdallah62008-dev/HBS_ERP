@@ -12,6 +12,7 @@ class OrderItem extends Model
         'sku', 'product_name',
         'quantity', 'unit_price', 'discount_amount', 'tax_amount', 'total_price',
         'unit_cost', 'marketer_trade_price',
+        'marketer_shipping_cost', 'marketer_vat_percent',
     ];
 
     protected $casts = [
@@ -22,6 +23,8 @@ class OrderItem extends Model
         'total_price' => 'decimal:2',
         'unit_cost' => 'decimal:2',
         'marketer_trade_price' => 'decimal:2',
+        'marketer_shipping_cost' => 'decimal:2',
+        'marketer_vat_percent' => 'decimal:2',
     ];
 
     public function order(): BelongsTo
