@@ -27,11 +27,20 @@ export default function OrderCreate({ products, categories = [], locations = [],
 
     const { data, setData, post, processing, errors, transform } = useForm({
         customer_id: null,
-        customer: { name: '', primary_phone: '', secondary_phone: '', email: '', city: '', governorate: '', country: defaultCountryName },
+        customer: {
+            name: '', primary_phone: '', secondary_phone: '',
+            primary_phone_whatsapp: true,
+            email: '',
+            city: '', governorate: '', country: defaultCountryName,
+        },
         customer_address: '',
         city: '',
         governorate: '',
         country: defaultCountryName,
+        // Phase 5.8: per-order phone snapshot. Defaults mirror the
+        // customer's profile (or sensible defaults for inline customers).
+        customer_phone_secondary: '',
+        customer_phone_whatsapp: true,
         source: '',
         external_order_reference: '',
         notes: '',
@@ -217,6 +226,11 @@ export default function OrderCreate({ products, categories = [], locations = [],
         setData('city', matchedCustomer.city ?? '');
         setData('governorate', matchedCustomer.governorate ?? '');
         setData('country', matchedCustomer.country ?? 'Egypt');
+        // Phase 5.8: also mirror the customer's secondary phone +
+        // WhatsApp preference onto the order snapshot so the matched
+        // customer's contact context flows in by default.
+        setData('customer_phone_secondary', matchedCustomer.secondary_phone ?? '');
+        setData('customer_phone_whatsapp', matchedCustomer.primary_phone_whatsapp ?? true);
     };
 
     transform((d) => {
@@ -241,7 +255,7 @@ export default function OrderCreate({ products, categories = [], locations = [],
     return (
         <AuthenticatedLayout header="New order">
             <Head title="New order" />
-            <PageHeader title="New order" subtitle="Capture customer, items, and shipping snapshot" />
+            <PageHeader title="New order" subtitle="Capture customer, items, and totals" />
 
             <form onSubmit={submit} className="space-y-5">
                 {/* Customer panel */}
@@ -275,6 +289,23 @@ export default function OrderCreate({ products, categories = [], locations = [],
                                         {matchedCustomer.email && <div>✉ {matchedCustomer.email}</div>}
                                         {matchedCustomer.city && <div>📍 {matchedCustomer.city}{matchedCustomer.governorate ? `, ${matchedCustomer.governorate}` : ''}</div>}
                                     </div>
+                                    {matchedCustomer.default_address && (
+                                        <div className="mt-1 text-xs text-slate-600">📦 <span className="text-slate-700">{matchedCustomer.default_address}</span></div>
+                                    )}
+                                    {/* Phase 5.8: per-order phone + WhatsApp snapshot for matched customer */}
+                                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                        <FormField label="Secondary phone (this order)" name="customer_phone_secondary" value={data.customer_phone_secondary} onChange={(v) => setData('customer_phone_secondary', v)} error={errors.customer_phone_secondary} hint="Optional · stored alongside this order" />
+                                        <label className="mt-6 flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!data.customer_phone_whatsapp}
+                                                onChange={(e) => setData('customer_phone_whatsapp', e.target.checked)}
+                                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                            />
+                                            <span aria-hidden="true" className="text-base">🟢</span>
+                                            <span>Primary phone reachable on WhatsApp</span>
+                                        </label>
+                                    </div>
                                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                         <StatusBadge value={matchedCustomer.customer_type} />
                                         <StatusBadge value={matchedCustomer.risk_level} />
@@ -298,15 +329,32 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     ) : (
                         <>
                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                <FormField
-                                    label="Primary phone"
-                                    name="customer.primary_phone"
-                                    value={data.customer.primary_phone}
-                                    onChange={(v) => setData('customer', { ...data.customer, primary_phone: v })}
-                                    error={errors['customer.primary_phone']}
-                                    required
-                                    hint={matchedCustomer ? null : 'We auto-match existing customers as you type'}
-                                />
+                                <div>
+                                    <FormField
+                                        label="Primary phone"
+                                        name="customer.primary_phone"
+                                        value={data.customer.primary_phone}
+                                        onChange={(v) => setData('customer', { ...data.customer, primary_phone: v })}
+                                        error={errors['customer.primary_phone']}
+                                        required
+                                        hint={matchedCustomer ? null : 'We auto-match existing customers as you type'}
+                                    />
+                                    {/* Phase 5.8 — WhatsApp checkbox sits next to the main phone. */}
+                                    <label className="mt-2 flex items-center gap-2 text-sm text-slate-700">
+                                        <input
+                                            type="checkbox"
+                                            checked={!!data.customer.primary_phone_whatsapp}
+                                            onChange={(e) => {
+                                                const v = e.target.checked;
+                                                setData('customer', { ...data.customer, primary_phone_whatsapp: v });
+                                                setData('customer_phone_whatsapp', v);
+                                            }}
+                                            className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                        />
+                                        <span aria-hidden="true" className="text-base">🟢</span>
+                                        <span>Reachable on WhatsApp</span>
+                                    </label>
+                                </div>
                                 <FormField
                                     label="Name"
                                     name="customer.name"
@@ -316,7 +364,18 @@ export default function OrderCreate({ products, categories = [], locations = [],
                                     required
                                 />
                                 <FormField label="Email" type="email" name="customer.email" value={data.customer.email} onChange={(v) => setData('customer', { ...data.customer, email: v })} error={errors['customer.email']} />
-                                <FormField label="Secondary phone" name="customer.secondary_phone" value={data.customer.secondary_phone} onChange={(v) => setData('customer', { ...data.customer, secondary_phone: v })} error={errors['customer.secondary_phone']} />
+                                <FormField
+                                    label="Secondary phone"
+                                    name="customer.secondary_phone"
+                                    value={data.customer.secondary_phone}
+                                    onChange={(v) => {
+                                        setData('customer', { ...data.customer, secondary_phone: v });
+                                        // Phase 5.8: mirror to per-order snapshot.
+                                        setData('customer_phone_secondary', v);
+                                    }}
+                                    error={errors['customer.secondary_phone']}
+                                    hint="Optional · also stored on the order"
+                                />
                                 <LocationSelect
                                     locations={locations}
                                     country={data.customer.country}
@@ -324,6 +383,10 @@ export default function OrderCreate({ products, categories = [], locations = [],
                                     city={data.customer.city}
                                     onChange={({ country, state, city }) => {
                                         setData('customer', { ...data.customer, country, governorate: state, city });
+                                        // Phase 5.8: customer's main address is the shipping address.
+                                        setData('country', country);
+                                        setData('governorate', state);
+                                        setData('city', city);
                                     }}
                                     errors={{
                                         country: errors['customer.country'],
@@ -332,6 +395,23 @@ export default function OrderCreate({ products, categories = [], locations = [],
                                     }}
                                     required
                                 />
+                                {/* Phase 5.8 — main customer address (also used as shipping address). */}
+                                <FormField
+                                    label="Main address"
+                                    name="customer_address"
+                                    error={errors.customer_address}
+                                    className="sm:col-span-2"
+                                    required
+                                    hint="Used for both billing and shipping"
+                                >
+                                    <textarea
+                                        id="customer_address"
+                                        rows={2}
+                                        value={data.customer_address}
+                                        onChange={(e) => setData('customer_address', e.target.value)}
+                                        className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm"
+                                    />
+                                </FormField>
                             </div>
 
                             {matchedCustomer && (
@@ -350,10 +430,10 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     )}
                 </section>
 
-                {/* Order details — initial status, external ref, entry code (Phase 5.4) */}
+                {/* Order details — initial status, external ref, entry code, source (Phase 5.4 + 5.8) */}
                 <section className="rounded-lg border border-slate-200 bg-white p-5">
                     <h2 className="mb-3 text-sm font-semibold text-slate-700">Order details</h2>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                         <div>
                             <label className="block text-sm font-medium text-slate-700">Initial status</label>
                             <div className="mt-1 inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-700">
@@ -376,41 +456,6 @@ export default function OrderCreate({ products, categories = [], locations = [],
                             </div>
                             <p className="mt-1 text-[11px] text-slate-400">Auto-detected. Marketer orders use the marketer&apos;s code.</p>
                         </div>
-                    </div>
-                </section>
-
-                {/* Shipping address */}
-                <section className="rounded-lg border border-slate-200 bg-white p-5">
-                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Shipping address</h2>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <FormField
-                            label="Address"
-                            name="customer_address"
-                            error={errors.customer_address}
-                            className="sm:col-span-2"
-                            required
-                        >
-                            <textarea
-                                id="customer_address"
-                                rows={2}
-                                value={data.customer_address}
-                                onChange={(e) => setData('customer_address', e.target.value)}
-                                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm"
-                            />
-                        </FormField>
-                        <LocationSelect
-                            locations={locations}
-                            country={data.country}
-                            state={data.governorate}
-                            city={data.city}
-                            onChange={({ country, state, city }) => {
-                                setData('country', country);
-                                setData('governorate', state);
-                                setData('city', city);
-                            }}
-                            errors={{ country: errors.country, state: errors.governorate, city: errors.city }}
-                            required
-                        />
                         <FormField label="Source" name="source" value={data.source} onChange={(v) => setData('source', v)} error={errors.source} hint="e.g. Facebook, TikTok, Walk-in" />
                     </div>
                 </section>

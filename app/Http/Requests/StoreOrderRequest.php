@@ -24,12 +24,21 @@ class StoreOrderRequest extends FormRequest
             'customer.governorate' => ['nullable', 'string', 'max:255'],
             'customer.email' => ['nullable', 'email', 'max:255'],
             'customer.secondary_phone' => ['nullable', 'string', 'max:32'],
+            // Phase 5.8: WhatsApp flag at the customer level — defaults to
+            // true, but persisted explicitly when the operator unchecks it.
+            'customer.primary_phone_whatsapp' => ['nullable', 'boolean'],
 
             // Shipping snapshot — required so the order is shippable.
+            // Phase 5.8: the form auto-populates these from the customer's
+            // main address (no separate "Shipping address" section).
             'customer_address' => ['required', 'string'],
             'city' => ['required', 'string', 'max:255'],
             'governorate' => ['nullable', 'string', 'max:255'],
             'country' => ['required', 'string', 'max:255'],
+
+            // Phase 5.8: per-order phone snapshot.
+            'customer_phone_secondary' => ['nullable', 'string', 'max:32'],
+            'customer_phone_whatsapp' => ['nullable', 'boolean'],
 
             'source' => ['nullable', 'string', 'max:64'],
             'external_order_reference' => ['nullable', 'string', 'max:64'],

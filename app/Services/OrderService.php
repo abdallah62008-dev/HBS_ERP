@@ -111,6 +111,14 @@ class OrderService
 
                 'customer_name' => $customer->name,
                 'customer_phone' => $customer->primary_phone,
+                // Phase 5.8: snapshot the secondary phone and WhatsApp
+                // reachability flag onto the order. Falls back to the
+                // customer's stored values when the form omits them.
+                'customer_phone_secondary' => $payload['customer_phone_secondary']
+                    ?? $customer->secondary_phone,
+                'customer_phone_whatsapp' => array_key_exists('customer_phone_whatsapp', $payload)
+                    ? (bool) $payload['customer_phone_whatsapp']
+                    : (bool) ($customer->primary_phone_whatsapp ?? true),
                 'customer_address' => $payload['customer_address'],
                 'city' => $payload['city'] ?? $customer->city,
                 'governorate' => $payload['governorate'] ?? $customer->governorate,
@@ -461,6 +469,10 @@ class OrderService
             'name' => $data['name'],
             'primary_phone' => $data['primary_phone'],
             'secondary_phone' => $data['secondary_phone'] ?? null,
+            // Phase 5.8: WhatsApp reachability defaults to true.
+            'primary_phone_whatsapp' => array_key_exists('primary_phone_whatsapp', $data)
+                ? (bool) $data['primary_phone_whatsapp']
+                : true,
             'email' => $data['email'] ?? null,
             'city' => $data['city'],
             'governorate' => $data['governorate'] ?? null,

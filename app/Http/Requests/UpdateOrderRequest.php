@@ -22,6 +22,10 @@ class UpdateOrderRequest extends FormRequest
             'governorate' => ['nullable', 'string', 'max:255'],
             'country' => ['sometimes', 'required', 'string', 'max:255'],
 
+            // Phase 5.8: per-order phone snapshot.
+            'customer_phone_secondary' => ['nullable', 'string', 'max:32'],
+            'customer_phone_whatsapp' => ['nullable', 'boolean'],
+
             'notes' => ['nullable', 'string'],
             'internal_notes' => ['nullable', 'string'],
             'source' => ['nullable', 'string', 'max:64'],

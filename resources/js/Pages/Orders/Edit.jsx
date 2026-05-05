@@ -9,6 +9,10 @@ export default function OrderEdit({ order, statuses }) {
         city: order.city ?? '',
         governorate: order.governorate ?? '',
         country: order.country ?? '',
+        // Phase 5.8: per-order phone snapshot (secondary phone +
+        // WhatsApp reachability flag for the primary phone).
+        customer_phone_secondary: order.customer_phone_secondary ?? '',
+        customer_phone_whatsapp: order.customer_phone_whatsapp ?? true,
         source: order.source ?? '',
         notes: order.notes ?? '',
         internal_notes: order.internal_notes ?? '',
@@ -31,9 +35,9 @@ export default function OrderEdit({ order, statuses }) {
 
             <form onSubmit={submit} className="space-y-5">
                 <section className="rounded-lg border border-slate-200 bg-white p-5">
-                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Delivery address</h2>
+                    <h2 className="mb-3 text-sm font-semibold text-slate-700">Customer address &amp; contact</h2>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <FormField label="Address" name="customer_address" error={errors.customer_address} className="sm:col-span-2" required>
+                        <FormField label="Address" name="customer_address" error={errors.customer_address} className="sm:col-span-2" required hint="Used for both billing and shipping">
                             <textarea
                                 id="customer_address"
                                 rows={2}
@@ -46,6 +50,18 @@ export default function OrderEdit({ order, statuses }) {
                         <FormField label="Governorate" name="governorate" value={data.governorate} onChange={(v) => setData('governorate', v)} error={errors.governorate} />
                         <FormField label="Country" name="country" value={data.country} onChange={(v) => setData('country', v)} error={errors.country} required />
                         <FormField label="Source" name="source" value={data.source} onChange={(v) => setData('source', v)} error={errors.source} />
+                        {/* Phase 5.8 — secondary phone + WhatsApp reachability for the primary phone. */}
+                        <FormField label="Secondary phone" name="customer_phone_secondary" value={data.customer_phone_secondary} onChange={(v) => setData('customer_phone_secondary', v)} error={errors.customer_phone_secondary} hint="Optional · alternate contact for this order" />
+                        <label className="mt-6 flex items-center gap-2 text-sm text-slate-700">
+                            <input
+                                type="checkbox"
+                                checked={!!data.customer_phone_whatsapp}
+                                onChange={(e) => setData('customer_phone_whatsapp', e.target.checked)}
+                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span aria-hidden="true" className="text-base">🟢</span>
+                            <span>Primary phone reachable on WhatsApp</span>
+                        </label>
                     </div>
                 </section>
 

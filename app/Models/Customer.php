@@ -13,7 +13,7 @@ class Customer extends Model
     use HasFactory, SoftDeletes;
 
     protected $fillable = [
-        'name', 'primary_phone', 'secondary_phone', 'email',
+        'name', 'primary_phone', 'secondary_phone', 'primary_phone_whatsapp', 'email',
         'city', 'governorate', 'country', 'default_address',
         'risk_score', 'risk_level', 'customer_type', 'notes',
         'created_by', 'updated_by', 'deleted_by',
@@ -21,6 +21,7 @@ class Customer extends Model
 
     protected $casts = [
         'risk_score' => 'integer',
+        'primary_phone_whatsapp' => 'boolean',
     ];
 
     /* Relationships */
