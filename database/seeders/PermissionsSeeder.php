@@ -119,6 +119,14 @@ class PermissionsSeeder extends Seeder
                 'marketers.statement' => 'View marketer statement',
                 'marketers.prices' => 'Manage marketer prices',
             ],
+            // Phase 7 — internal-support / customer-issue tickets.
+            'tickets' => [
+                'tickets.view' => 'View tickets',
+                'tickets.create' => 'Create ticket',
+                'tickets.edit' => 'Edit ticket',
+                'tickets.delete' => 'Delete ticket',
+                'tickets.manage' => 'Manage all tickets (cross-user access + status control)',
+            ],
             'reports' => [
                 'reports.view' => 'View reports module',
                 'reports.sales' => 'View sales report',

@@ -79,6 +79,8 @@ class RolesSeeder extends Seeder
             // Approvals
             'approvals.manage',
             'audit_logs.view',
+            // Tickets — full management for ops oversight (Phase 7).
+            'tickets.view', 'tickets.create', 'tickets.edit', 'tickets.delete', 'tickets.manage',
         ];
 
         $orderAgent = [
@@ -86,7 +88,8 @@ class RolesSeeder extends Seeder
             'orders.change_status',
             'customers.view', 'customers.create', 'customers.edit', 'customers.view_risk',
             'products.view',
-            'tickets.view' => 'tickets.view', // future-proof; ignored if missing
+            // Order agents handle customer-issue tickets at intake (Phase 7).
+            'tickets.view', 'tickets.create',
         ];
 
         $shippingAgent = [
@@ -127,6 +130,10 @@ class RolesSeeder extends Seeder
             // the current marketer's records by query filters in controllers.
             'orders.view', 'orders.create',
             'marketers.wallet', 'marketers.statement',
+            // Phase 7 — marketers can raise tickets for issues with their
+            // own orders. tickets.manage is intentionally NOT granted, so
+            // ownership scoping limits visibility to their own tickets.
+            'tickets.view', 'tickets.create',
         ];
 
         $viewer = [
@@ -136,6 +143,7 @@ class RolesSeeder extends Seeder
             'expenses.view', 'ads.view', 'marketers.view',
             'reports.view', 'reports.sales', 'reports.profit',
             'reports.inventory', 'reports.shipping',
+            'tickets.view',
         ];
 
         // Filter out any permission slugs that don't exist yet (forward-

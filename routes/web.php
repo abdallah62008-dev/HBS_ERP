@@ -309,8 +309,14 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:returns.approve')->delete('/return-reasons/{returnReason}', [ReturnReasonsController::class, 'destroy'])
         ->name('return-reasons.destroy');
 
-    Route::get('/tickets', ModuleStubController::class)
-        ->defaults('module', 'Tickets')->defaults('phase', 'Phase 4')->name('tickets.index');
+    /* ─────────────── Tickets (Phase 7) ─────────────── */
+    Route::middleware('permission:tickets.view')->get('/tickets', [\App\Http\Controllers\TicketsController::class, 'index'])->name('tickets.index');
+    Route::middleware('permission:tickets.create')->get('/tickets/create', [\App\Http\Controllers\TicketsController::class, 'create'])->name('tickets.create');
+    Route::middleware('permission:tickets.create')->post('/tickets', [\App\Http\Controllers\TicketsController::class, 'store'])->name('tickets.store');
+    Route::middleware('permission:tickets.view')->get('/tickets/{ticket}', [\App\Http\Controllers\TicketsController::class, 'show'])->name('tickets.show');
+    Route::middleware('permission:tickets.edit')->get('/tickets/{ticket}/edit', [\App\Http\Controllers\TicketsController::class, 'edit'])->name('tickets.edit');
+    Route::middleware('permission:tickets.edit')->put('/tickets/{ticket}', [\App\Http\Controllers\TicketsController::class, 'update'])->name('tickets.update');
+    Route::middleware('permission:tickets.delete')->delete('/tickets/{ticket}', [\App\Http\Controllers\TicketsController::class, 'destroy'])->name('tickets.destroy');
 
     /* ─────────────── Expenses (Phase 5) ─────────────── */
     Route::middleware('permission:expenses.view')->get('/expenses', [ExpensesController::class, 'index'])->name('expenses.index');

@@ -143,11 +143,9 @@ export const sidebarSections = [
         title: 'Customer Service',
         icon: I.ticket,
         items: [
-            // Tickets is currently a stub (ModuleStubController). Show it
-            // anyway so support staff know where it will live, but only
-            // when tickets-related permission lands; for now, no permission
-            // gate so it stays visible during the stub phase.
-            { label: 'Tickets', href: '/tickets', icon: I.ticket },
+            // Phase 7 — real Tickets module replaces the previous stub.
+            // Visible only for users with view OR create capability.
+            { label: 'Tickets', href: '/tickets', icon: I.ticket, permission: ['tickets.view', 'tickets.create'] },
         ],
     },
     {
