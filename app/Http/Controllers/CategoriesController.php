@@ -27,7 +27,7 @@ class CategoriesController extends Controller
         ]);
     }
 
-    public function store(StoreCategoryRequest $request): RedirectResponse
+    public function store(StoreCategoryRequest $request)
     {
         $category = Category::create([
             ...$request->validated(),
@@ -36,6 +36,15 @@ class CategoriesController extends Controller
         ]);
 
         AuditLogService::logModelChange($category, 'created', 'products');
+
+        // Inline modal flow (e.g. Quick Category from the Product form)
+        // expects JSON back so it can append to local state and auto-select
+        // the new category without leaving the page.
+        if ($request->wantsJson()) {
+            return response()->json([
+                'category' => $category->only(['id', 'name', 'parent_id', 'status']),
+            ], 201);
+        }
 
         return redirect()
             ->route('categories.index')

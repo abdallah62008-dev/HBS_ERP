@@ -88,6 +88,7 @@ export const sidebarSections = [
         icon: I.box,
         items: [
             { label: 'Products', href: '/products', icon: I.box, permission: 'products.view' },
+            { label: 'Categories', href: '/categories', icon: I.layers, permission: 'products.view' },
             { label: 'Warehouses', href: '/warehouses', icon: I.box, permission: 'inventory.view' },
             { label: 'Inventory', href: '/inventory', icon: I.layers, permission: 'inventory.view' },
             { label: 'Stock Movements', href: '/inventory/movements', icon: I.layers, permission: 'inventory.view_movements' },

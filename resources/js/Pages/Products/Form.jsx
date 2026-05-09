@@ -1,4 +1,7 @@
 import FormField from '@/Components/FormField';
+import useCan from '@/Hooks/useCan';
+import { usePage } from '@inertiajs/react';
+import { useState } from 'react';
 
 const VAT_DEFAULT = 14;
 
@@ -32,6 +35,19 @@ const computeExpectedProfit = (sellingPrice, row) => {
 };
 
 export default function ProductForm({ data, setData, errors, categories, marketerTiers = [], isEdit = false }) {
+    const can = useCan();
+    // Local categories state lets the inline Quick Category modal append a
+    // new row without re-fetching the page or losing the in-progress
+    // product form. Initialised from the prop on first render.
+    const [cats, setCats] = useState(categories);
+    const [showCategoryModal, setShowCategoryModal] = useState(false);
+
+    const onCategoryCreated = (newCategory) => {
+        setCats((prev) => [...prev, newCategory]);
+        setData('category_id', newCategory.id);
+        setShowCategoryModal(false);
+    };
+
     const updateTierCell = (code, key, value) => {
         const next = { ...(data.tier_prices ?? {}) };
         next[code] = { ...(next[code] ?? {}), [key]: value };
@@ -54,18 +70,39 @@ export default function ProductForm({ data, setData, errors, categories, markete
             <FormField label="Barcode" name="barcode" value={data.barcode} onChange={(v) => setData('barcode', v)} error={errors.barcode} />
 
             <FormField label="Category" name="category_id" error={errors.category_id}>
-                <select
-                    id="category_id"
-                    value={data.category_id ?? ''}
-                    onChange={(e) => setData('category_id', e.target.value || null)}
-                    className="mt-1 block w-full rounded-md border-slate-300 shadow-sm sm:text-sm"
-                >
-                    <option value="">— None —</option>
-                    {categories.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                </select>
+                <div className="mt-1 flex gap-2">
+                    <select
+                        id="category_id"
+                        value={data.category_id ?? ''}
+                        onChange={(e) => setData('category_id', e.target.value || null)}
+                        className="block w-full rounded-md border-slate-300 shadow-sm sm:text-sm"
+                    >
+                        <option value="">— None —</option>
+                        {cats.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                    </select>
+                    {can('products.create') && (
+                        <button
+                            type="button"
+                            onClick={() => setShowCategoryModal(true)}
+                            className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                            aria-label="Add new category"
+                            title="Add a new category without leaving this form"
+                        >
+                            + Add
+                        </button>
+                    )}
+                </div>
             </FormField>
+
+            {showCategoryModal && (
+                <QuickCategoryModal
+                    parents={cats.filter((c) => !c.parent_id)}
+                    onClose={() => setShowCategoryModal(false)}
+                    onCreated={onCategoryCreated}
+                />
+            )}
 
             <FormField label="Description" name="description" error={errors.description} className="sm:col-span-2">
                 <textarea
@@ -251,6 +288,158 @@ export default function ProductForm({ data, setData, errors, categories, markete
                     className="sm:col-span-2"
                 />
             )}
+        </div>
+    );
+}
+
+/**
+ * Inline category creation triggered from the Product form. Submits
+ * directly to POST /categories with `Accept: application/json` so the
+ * existing controller returns the new category as JSON instead of
+ * redirecting to /categories. Mirrors the `QuickCustomerModal` pattern
+ * used in the Order Create page.
+ */
+function QuickCategoryModal({ parents, onClose, onCreated }) {
+    const { props } = usePage();
+    const [name, setName] = useState('');
+    const [parentId, setParentId] = useState('');
+    const [errors, setErrors] = useState({});
+    const [submitting, setSubmitting] = useState(false);
+    const [generalError, setGeneralError] = useState(null);
+
+    const submit = async (e) => {
+        e.preventDefault();
+        setSubmitting(true);
+        setErrors({});
+        setGeneralError(null);
+
+        try {
+            const csrf = decodeURIComponent(document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] || '');
+            const res = await fetch(route('categories.store'), {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-XSRF-TOKEN': csrf,
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify({
+                    name: name.trim(),
+                    parent_id: parentId || null,
+                    status: 'Active',
+                }),
+            });
+
+            if (res.status === 201 || res.status === 200) {
+                const body = await res.json();
+                if (body?.category?.id) {
+                    onCreated(body.category);
+                    return;
+                }
+                setGeneralError('Unexpected response from server.');
+                return;
+            }
+
+            if (res.status === 422) {
+                const body = await res.json().catch(() => ({}));
+                setErrors(body.errors ?? {});
+                return;
+            }
+
+            if (res.status === 403) {
+                setGeneralError('You do not have permission to create categories.');
+                return;
+            }
+
+            setGeneralError(`Could not create category (HTTP ${res.status}).`);
+        } catch (err) {
+            setGeneralError('Network error. Please try again.');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="quick-category-title"
+            onClick={onClose}
+        >
+            <div
+                className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="mb-3 flex items-center justify-between">
+                    <h3 id="quick-category-title" className="text-sm font-semibold text-slate-700">Add category</h3>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="rounded-md text-xs text-slate-400 hover:text-slate-700"
+                        aria-label="Close"
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                {generalError && (
+                    <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                        {generalError}
+                    </div>
+                )}
+
+                <form onSubmit={submit} className="space-y-3">
+                    <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-600">Name <span className="text-red-500">*</span></label>
+                        <input
+                            type="text"
+                            autoFocus
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            className="block w-full rounded-md border-slate-300 text-sm"
+                            required
+                            maxLength={255}
+                        />
+                        {errors.name && <p className="mt-1 text-xs text-red-600">{Array.isArray(errors.name) ? errors.name[0] : errors.name}</p>}
+                    </div>
+
+                    <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-600">Parent (optional)</label>
+                        <select
+                            value={parentId}
+                            onChange={(e) => setParentId(e.target.value)}
+                            className="block w-full rounded-md border-slate-300 text-sm"
+                        >
+                            <option value="">— No parent —</option>
+                            {parents.map((p) => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                        </select>
+                        {errors.parent_id && <p className="mt-1 text-xs text-red-600">{Array.isArray(errors.parent_id) ? errors.parent_id[0] : errors.parent_id}</p>}
+                    </div>
+
+                    <p className="text-[11px] text-slate-400">New categories are saved as Active. Manage status from the Categories page.</p>
+
+                    <div className="flex justify-end gap-2 pt-2">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={submitting || !name.trim()}
+                            className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+                        >
+                            {submitting ? 'Saving…' : 'Save category'}
+                        </button>
+                    </div>
+                </form>
+            </div>
         </div>
     );
 }

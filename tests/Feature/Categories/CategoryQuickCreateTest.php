@@ -1,0 +1,188 @@
+<?php
+
+namespace Tests\Feature\Categories;
+
+use App\Models\AuditLog;
+use App\Models\Category;
+use App\Models\Permission;
+use App\Models\Role;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
+use Tests\TestCase;
+
+/**
+ * Coverage for the inline "Quick Category" creation flow used by the
+ * Product Add/Edit form. The same `POST /categories` endpoint serves
+ * both the existing /categories management page (Inertia redirect) and
+ * the inline modal (JSON response). These tests focus on the JSON path
+ * — the redirect path is exercised indirectly by existing UAT.
+ *
+ * Permission model: categories piggyback on the products.* slugs by
+ * design (see CategoriesController routes). users.create / users.edit
+ * have nothing to do with categories.
+ */
+class CategoryQuickCreateTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private User $admin;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // RefreshDatabase wipes between tests; seed the catalogue once.
+        $this->seed();
+
+        $this->admin = User::where('email', 'admin@hbs.local')->firstOrFail();
+    }
+
+    public function test_user_with_products_create_can_create_category_via_json(): void
+    {
+        $this->actingAs($this->admin);
+
+        $response = $this->postJson(route('categories.store'), [
+            'name' => 'Phone Cases',
+            'parent_id' => null,
+            'status' => 'Active',
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonStructure(['category' => ['id', 'name', 'parent_id', 'status']])
+            ->assertJsonPath('category.name', 'Phone Cases')
+            ->assertJsonPath('category.parent_id', null)
+            ->assertJsonPath('category.status', 'Active');
+
+        $this->assertDatabaseHas('categories', [
+            'name' => 'Phone Cases',
+            'parent_id' => null,
+            'status' => 'Active',
+            'created_by' => $this->admin->id,
+        ]);
+    }
+
+    public function test_user_without_products_create_gets_403(): void
+    {
+        // Build a minimal user that holds no permissions. Use a non-system
+        // role so we can detach products.create from it explicitly.
+        $role = Role::create([
+            'slug' => 'pcat-test-no-create',
+            'name' => 'No-Create Test',
+            'is_system' => false,
+            'description' => 'Test role with no products.create.',
+        ]);
+        // Grant products.view (so they can hit /categories index endpoint
+        // legitimately) but NOT products.create.
+        $viewPerm = Permission::where('slug', 'products.view')->firstOrFail();
+        $role->permissions()->attach($viewPerm->id);
+
+        $user = User::create([
+            'name' => 'Limited User',
+            'email' => 'limited@hbs.local',
+            'password' => Hash::make('LimitedPass1234'),
+            'role_id' => $role->id,
+            'status' => 'Active',
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($user);
+
+        $response = $this->postJson(route('categories.store'), [
+            'name' => 'Should Fail',
+            'parent_id' => null,
+            'status' => 'Active',
+        ]);
+
+        $response->assertStatus(403);
+
+        $this->assertDatabaseMissing('categories', ['name' => 'Should Fail']);
+    }
+
+    public function test_duplicate_sibling_category_name_returns_validation_error(): void
+    {
+        $this->actingAs($this->admin);
+
+        Category::create([
+            'name' => 'Accessories',
+            'parent_id' => null,
+            'status' => 'Active',
+            'created_by' => $this->admin->id,
+            'updated_by' => $this->admin->id,
+        ]);
+
+        $response = $this->postJson(route('categories.store'), [
+            'name' => 'Accessories',
+            'parent_id' => null,
+            'status' => 'Active',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['name']);
+
+        $this->assertSame(1, Category::where('name', 'Accessories')->whereNull('parent_id')->count());
+    }
+
+    public function test_same_name_under_different_parents_is_allowed(): void
+    {
+        $this->actingAs($this->admin);
+
+        $electronics = Category::create([
+            'name' => 'Electronics',
+            'parent_id' => null,
+            'status' => 'Active',
+            'created_by' => $this->admin->id,
+            'updated_by' => $this->admin->id,
+        ]);
+        $home = Category::create([
+            'name' => 'Home',
+            'parent_id' => null,
+            'status' => 'Active',
+            'created_by' => $this->admin->id,
+            'updated_by' => $this->admin->id,
+        ]);
+
+        // First "Cables" under Electronics — should succeed.
+        $first = $this->postJson(route('categories.store'), [
+            'name' => 'Cables',
+            'parent_id' => $electronics->id,
+            'status' => 'Active',
+        ]);
+        $first->assertStatus(201);
+
+        // Second "Cables" under Home — should also succeed (different parent).
+        $second = $this->postJson(route('categories.store'), [
+            'name' => 'Cables',
+            'parent_id' => $home->id,
+            'status' => 'Active',
+        ]);
+        $second->assertStatus(201);
+
+        $this->assertSame(2, Category::where('name', 'Cables')->count());
+    }
+
+    public function test_category_creation_writes_audit_log(): void
+    {
+        $this->actingAs($this->admin);
+
+        $response = $this->postJson(route('categories.store'), [
+            'name' => 'Audit Probe',
+            'parent_id' => null,
+            'status' => 'Active',
+        ]);
+
+        $response->assertStatus(201);
+
+        $newId = $response->json('category.id');
+
+        // CategoriesController::store calls AuditLogService::logModelChange
+        // with module = 'products' (matches permission slug source).
+        $this->assertDatabaseHas('audit_logs', [
+            'module' => 'products',
+            'action' => 'created',
+            'record_type' => Category::class,
+            'record_id' => $newId,
+            'user_id' => $this->admin->id,
+        ]);
+    }
+}
