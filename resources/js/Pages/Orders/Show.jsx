@@ -59,6 +59,18 @@ export default function OrderShow({ order, statuses }) {
                                 Change status
                             </button>
                         )}
+                        {props.auth?.user?.is_super_admin && (
+                            <button
+                                onClick={() => {
+                                    if (confirm('Are you sure you want to delete this order? This action is restricted to Super Admin and is reversible (soft-delete).')) {
+                                        router.delete(route('orders.destroy', order.id));
+                                    }
+                                }}
+                                className="rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
+                            >
+                                Delete order
+                            </button>
+                        )}
                     </div>
                 }
             />

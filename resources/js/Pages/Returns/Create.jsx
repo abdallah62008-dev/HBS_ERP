@@ -3,7 +3,7 @@ import PageHeader from '@/Components/PageHeader';
 import FormField from '@/Components/FormField';
 import { Head, Link, useForm } from '@inertiajs/react';
 
-export default function ReturnCreate({ preselected_order, recent_orders, reasons }) {
+export default function ReturnCreate({ preselected_order, recent_orders, reasons, already_returned_notice }) {
     const { data, setData, post, processing, errors } = useForm({
         order_id: preselected_order?.id ?? '',
         return_reason_id: '',
@@ -21,6 +21,12 @@ export default function ReturnCreate({ preselected_order, recent_orders, reasons
             <PageHeader title="Open a return" subtitle="Records a return against an existing order. Inspection happens next." />
 
             <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
+                {already_returned_notice && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                        {already_returned_notice}
+                    </div>
+                )}
+
                 {preselected_order ? (
                     <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
                         <div className="text-sm text-slate-700">Order: <span className="font-mono">{preselected_order.order_number}</span></div>
@@ -36,6 +42,7 @@ export default function ReturnCreate({ preselected_order, recent_orders, reasons
                                 </option>
                             ))}
                         </select>
+                        <p className="mt-1 text-[11px] text-slate-400">Only orders without an existing return are listed.</p>
                     </FormField>
                 )}
 

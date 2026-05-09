@@ -49,15 +49,32 @@ class ReturnsController extends Controller
     public function create(Request $request): Response
     {
         // Allow ?order_id=X for "create return for this order" workflow.
+        // If that order already has a return, the validation rule on
+        // OrderReturnRequest will reject the submission — but the UI
+        // shouldn't even surface it as a candidate. We pre-resolve the
+        // preselected order *only if* it has no existing return.
         $order = null;
+        $alreadyReturnedNotice = null;
         if ($request->filled('order_id')) {
-            $order = Order::with('customer:id,name,primary_phone')->find($request->order_id);
+            $candidate = Order::with('customer:id,name,primary_phone')->find($request->order_id);
+            if ($candidate) {
+                if ($candidate->returns()->exists()) {
+                    $alreadyReturnedNotice = "Order {$candidate->order_number} already has a return record and cannot be returned again.";
+                } else {
+                    $order = $candidate;
+                }
+            }
         }
 
         return Inertia::render('Returns/Create', [
             'preselected_order' => $order,
+            'already_returned_notice' => $alreadyReturnedNotice,
+            // Exclude orders that already have a return from the
+            // dropdown. Backend validation will also reject duplicates
+            // (defense in depth) — see OrderReturnRequest::rules().
             'recent_orders' => $order ? null : Order::query()
                 ->whereIn('status', ['Shipped', 'Delivered', 'Returned'])
+                ->whereDoesntHave('returns')
                 ->with('customer:id,name')
                 ->latest('id')->limit(50)
                 ->get(['id', 'order_number', 'customer_name', 'status']),

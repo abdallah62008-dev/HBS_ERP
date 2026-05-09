@@ -245,30 +245,63 @@ class OrdersController extends Controller
             ->with('success', 'Order updated.');
     }
 
+    /**
+     * Soft-delete an order.
+     *
+     * Per the operations policy, only super-admins may delete orders —
+     * even users with the legacy `orders.delete` permission slug get a
+     * hard 403 here. This replaces the prior approval-request workflow
+     * (which let any user with `orders.delete` open an approval) with a
+     * direct super-admin-only action.
+     *
+     * Soft-delete is used so the order's history is preserved: items,
+     * inventory movements, shipping records, returns, marketer
+     * transactions, and audit trails remain intact and can be restored
+     * via `Order::withTrashed()` if the deletion was a mistake. The
+     * authoritative cleanup (`destroyForce`) stays for emergency hard
+     * deletes triggered by other paths and is itself gated by route
+     * middleware.
+     */
     public function destroy(Request $request, Order $order): RedirectResponse
     {
+        $user = $request->user();
+
+        // Hard 403 for non-super-admins. Reachable only by direct route
+        // hit; the UI's delete control should already be hidden via the
+        // `auth.user.is_super_admin` flag.
+        if (! $user || ! $user->isSuperAdmin()) {
+            abort(403, 'Only super administrators can delete orders.');
+        }
+
         $this->authorizeOwnership($order);
 
-        // Phase 8: deletion is gated by an approval request. The actor
-        // who clicks Delete creates a Pending approval; a different
-        // user with `approvals.manage` must approve before the soft
-        // delete actually happens.
-        $reason = (string) $request->input('reason', 'No reason provided.');
+        $reason = trim((string) $request->input('reason', ''));
 
-        app(\App\Services\ApprovalService::class)->request(
-            type: 'Delete Order',
-            target: $order,
+        // Soft delete preserves all related rows (items, inventory
+        // movements, returns, shipments, marketer transactions, audit
+        // trail). No orphaning.
+        $order->update(['deleted_by' => $user->id]);
+        $order->delete();
+
+        AuditLogService::log(
+            action: 'soft_deleted',
+            module: 'orders',
+            recordType: Order::class,
+            recordId: $order->id,
             oldValues: [
                 'order_number' => $order->order_number,
                 'status' => $order->status,
                 'total_amount' => $order->total_amount,
             ],
-            newValues: ['action' => 'soft_delete'],
-            reason: $reason,
+            newValues: [
+                'action' => 'soft_delete',
+                'reason' => $reason !== '' ? $reason : 'No reason provided.',
+            ],
         );
 
-        return back()->with('success',
-            "Delete request submitted for {$order->order_number}. A manager must approve it.");
+        return redirect()
+            ->route('orders.index')
+            ->with('success', "Order {$order->order_number} deleted.");
     }
 
     /**
