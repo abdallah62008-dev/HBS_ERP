@@ -4,6 +4,7 @@ import FormField from '@/Components/FormField';
 import StatusBadge from '@/Components/StatusBadge';
 import LocationSelect from '@/Components/LocationSelect';
 import useCan from '@/Hooks/useCan';
+import useUnsavedChangesWarning from '@/Hooks/useUnsavedChangesWarning';
 import { Head, Link, useForm, usePage, router } from '@inertiajs/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -25,7 +26,7 @@ export default function OrderCreate({ products, categories = [], locations = [],
 
     const defaultCountryName = (locations.find((c) => c.code === default_country_code)?.name_en) ?? 'Egypt';
 
-    const { data, setData, post, processing, errors, transform } = useForm({
+    const { data, setData, post, processing, errors, transform, isDirty } = useForm({
         customer_id: null,
         customer: {
             name: '', primary_phone: '', secondary_phone: '',
@@ -53,6 +54,9 @@ export default function OrderCreate({ products, categories = [], locations = [],
         items: [],
         duplicate_acknowledged: false,
     });
+
+    // Warn before leaving the page if there are unsaved edits.
+    useUnsavedChangesWarning(isDirty);
 
     /* Phase 5.9 — live marketer profit preview state */
     const [marketerProfit, setMarketerProfit] = useState(null);

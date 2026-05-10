@@ -1,10 +1,11 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import ProductForm from './Form';
+import useUnsavedChangesWarning from '@/Hooks/useUnsavedChangesWarning';
 import { Head, Link, useForm } from '@inertiajs/react';
 
 export default function ProductCreate({ categories, marketer_tiers = [] }) {
-    const { data, setData, post, processing, errors } = useForm({
+    const { data, setData, post, processing, errors, isDirty } = useForm({
         name: '',
         sku: '',
         barcode: '',
@@ -20,6 +21,8 @@ export default function ProductCreate({ categories, marketer_tiers = [] }) {
         status: 'Active',
         tier_prices: {},
     });
+
+    useUnsavedChangesWarning(isDirty);
 
     const submit = (e) => {
         e.preventDefault();

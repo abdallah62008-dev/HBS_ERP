@@ -1,10 +1,11 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import CustomerForm from './Form';
+import useUnsavedChangesWarning from '@/Hooks/useUnsavedChangesWarning';
 import { Head, useForm, Link } from '@inertiajs/react';
 
 export default function CustomerEdit({ customer, tags, locations = [] }) {
-    const { data, setData, put, processing, errors } = useForm({
+    const { data, setData, put, processing, errors, isDirty } = useForm({
         name: customer.name ?? '',
         primary_phone: customer.primary_phone ?? '',
         secondary_phone: customer.secondary_phone ?? '',
@@ -17,6 +18,8 @@ export default function CustomerEdit({ customer, tags, locations = [] }) {
         notes: customer.notes ?? '',
         tags: tags ?? [],
     });
+
+    useUnsavedChangesWarning(isDirty);
 
     const submit = (e) => {
         e.preventDefault();

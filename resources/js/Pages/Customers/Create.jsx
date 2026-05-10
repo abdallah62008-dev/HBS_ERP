@@ -1,13 +1,14 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import CustomerForm from './Form';
+import useUnsavedChangesWarning from '@/Hooks/useUnsavedChangesWarning';
 import { Head, useForm, Link } from '@inertiajs/react';
 
 export default function CustomerCreate({ locations = [], default_country_code = 'EG' }) {
     // Map default code → existing English name used by the legacy text columns.
     const defaultCountryName = (locations.find((c) => c.code === default_country_code)?.name_en) ?? 'Egypt';
 
-    const { data, setData, post, processing, errors } = useForm({
+    const { data, setData, post, processing, errors, isDirty } = useForm({
         name: '',
         primary_phone: '',
         secondary_phone: '',
@@ -20,6 +21,8 @@ export default function CustomerCreate({ locations = [], default_country_code = 
         notes: '',
         tags: [],
     });
+
+    useUnsavedChangesWarning(isDirty);
 
     const submit = (e) => {
         e.preventDefault();
