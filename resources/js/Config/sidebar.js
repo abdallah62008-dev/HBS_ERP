@@ -84,6 +84,19 @@ export const sidebarSections = [
         ],
     },
     {
+        title: 'Shipping & Fulfillment',
+        icon: I.truck,
+        items: [
+            { label: 'Ready to Pack', href: '/shipping/ready-to-pack', icon: I.truck, permission: 'shipping.view' },
+            { label: 'Ready to Ship', href: '/shipping/ready-to-ship', icon: I.truck, permission: 'shipping.view' },
+            { label: 'Shipping Dashboard', href: '/shipping', icon: I.truck, permission: 'shipping.view' },
+            { label: 'Shipments', href: '/shipping/shipments', icon: I.truck, permission: 'shipping.view' },
+            { label: 'Carriers & Rates', href: '/shipping-companies', icon: I.truck, permission: 'shipping.view' },
+            { label: 'Delayed Shipments', href: '/shipping/delayed', icon: I.warning, permission: 'shipping.view' },
+            { label: '4×6 Labels', href: '/shipping-labels', icon: I.receipt, permission: 'shipping.print_label' },
+        ],
+    },
+    {
         title: 'Inventory & Products',
         icon: I.box,
         items: [
@@ -103,19 +116,6 @@ export const sidebarSections = [
         items: [
             { label: 'Suppliers', href: '/suppliers', icon: I.users, permission: 'suppliers.view' },
             { label: 'Purchase Invoices', href: '/purchase-invoices', icon: I.receipt, permission: 'purchases.view' },
-        ],
-    },
-    {
-        title: 'Shipping & Fulfillment',
-        icon: I.truck,
-        items: [
-            { label: 'Shipping Dashboard', href: '/shipping', icon: I.truck, permission: 'shipping.view' },
-            { label: 'Ready to Pack', href: '/shipping/ready-to-pack', icon: I.truck, permission: 'shipping.view' },
-            { label: 'Ready to Ship', href: '/shipping/ready-to-ship', icon: I.truck, permission: 'shipping.view' },
-            { label: 'Shipments', href: '/shipping/shipments', icon: I.truck, permission: 'shipping.view' },
-            { label: 'Carriers & Rates', href: '/shipping-companies', icon: I.truck, permission: 'shipping.view' },
-            { label: 'Delayed Shipments', href: '/shipping/delayed', icon: I.warning, permission: 'shipping.view' },
-            { label: '4×6 Labels', href: '/shipping-labels', icon: I.receipt, permission: 'shipping.print_label' },
         ],
     },
     {

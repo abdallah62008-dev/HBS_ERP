@@ -8,6 +8,11 @@ import { Head, Link, usePage } from '@inertiajs/react';
  *
  * Marketer users are redirected server-side (DashboardController) to
  * /marketer/dashboard so they never reach this view.
+ *
+ * KPIs are grouped into workflow sections — Today Snapshot, Sales
+ * Operations, Fulfillment Operations, Inventory Alerts, Support — so
+ * each role can scan the row that matters to them. Permission-locked
+ * sections collapse to nothing when the user lacks visibility.
  */
 
 /* ────────────────────── Building blocks ────────────────────── */
@@ -180,9 +185,26 @@ function QuickAction({ href, label, icon }) {
     );
 }
 
+/**
+ * Section header + grid. Children are the KPI cards. The section
+ * collapses to null if no children render (all were permission-locked).
+ */
+function Section({ title, children }) {
+    const items = Array.isArray(children) ? children.filter(Boolean) : (children ? [children] : []);
+    if (items.length === 0) return null;
+    return (
+        <section className="mt-6">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">{title}</h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                {items}
+            </div>
+        </section>
+    );
+}
+
 /* ────────────────────── Page ────────────────────── */
 
-export default function Dashboard({ kpis, charts, tables, alerts }) {
+export default function Dashboard({ kpis, charts, tables, alerts, permissions }) {
     const { props } = usePage();
     const user = props.auth?.user;
     const sym = props.app?.currency_symbol ?? '';
@@ -192,6 +214,12 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
     const orders = deltaParts(Number(kpis?.orders_today || 0), Number(kpis?.orders_yesterday || 0));
 
     const statusTotal = (charts?.status_distribution ?? []).reduce((acc, d) => acc + d.count, 0);
+
+    // latest_orders is server-gated by orders.view — when the server
+    // omits/empties it, hide the Card entirely rather than show an empty
+    // state. The empty state is reserved for "permitted but no data".
+    const canViewOrders = permissions?.orders_view ?? can('orders.view');
+    const canViewTickets = permissions?.tickets_view ?? can('tickets.view');
 
     return (
         <AuthenticatedLayout header="Dashboard">
@@ -211,10 +239,8 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                 </p>
             </div>
 
-            {/* KPI cards. Each card links to the most useful detail page
-                when the user has permission to view it; otherwise renders
-                as a static tile. */}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {/* Today Snapshot — the headline operational row. */}
+            <Section title="Today Snapshot">
                 <KpiCard
                     label="Orders today"
                     value={kpis?.orders_today ?? 0}
@@ -232,6 +258,13 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                     href={can('reports.sales') ? route('reports.sales') : undefined}
                 />
                 <KpiCard
+                    label="Delivered today"
+                    value={kpis?.delivered_today ?? 0}
+                    hint={kpis?.delivered_mtd != null ? `${kpis.delivered_mtd} MTD` : undefined}
+                    accent="emerald"
+                    href={can('orders.view') ? route('orders.index') : undefined}
+                />
+                <KpiCard
                     label="Collections today"
                     value={<Money value={kpis?.collections_today_amount} sym={sym} />}
                     hint={(kpis?.collections_today_count ?? 0) + ' collected'}
@@ -239,11 +272,30 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                     href={can('collections.view') ? route('collections.index') : undefined}
                 />
                 <KpiCard
+                    label="Returns today"
+                    value={kpis?.returns_today ?? 0}
+                    href={can('returns.view') ? route('returns.index') : undefined}
+                />
+            </Section>
+
+            {/* Sales Operations — pipeline + customer signals. */}
+            <Section title="Sales Operations">
+                <KpiCard
                     label="Pending orders"
                     value={kpis?.pending_orders ?? 0}
                     hint="New + Pending Conf. + Confirmed"
                     href={can('orders.view') ? route('orders.index') : undefined}
                 />
+                <KpiCard
+                    label="Active customers (MTD)"
+                    value={kpis?.active_customers_this_month ?? 0}
+                    hint="Distinct customers"
+                    href={can('customers.view') ? route('customers.index') : undefined}
+                />
+            </Section>
+
+            {/* Fulfillment Operations — what's in flight right now. */}
+            <Section title="Fulfillment Operations">
                 <KpiCard
                     label="Ready to pack"
                     value={kpis?.ready_to_pack ?? 0}
@@ -257,39 +309,63 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                     href={can('shipping.view') ? route('shipping.ready-to-ship') : undefined}
                 />
                 <KpiCard
+                    label="Active shipments"
+                    value={kpis?.active_shipments ?? 0}
+                    hint="Assigned → Out for Delivery"
+                    accent="indigo"
+                    href={can('shipping.view') ? route('shipping.shipments') : undefined}
+                />
+                <KpiCard
                     label="Delayed shipments"
                     value={kpis?.delayed_shipments ?? 0}
                     accent={kpis?.delayed_shipments > 0 ? 'red' : 'slate'}
                     href={can('shipping.view') ? route('shipping.delayed') : undefined}
                 />
-                <KpiCard
-                    label="Returns today"
-                    value={kpis?.returns_today ?? 0}
-                    href={can('returns.view') ? route('returns.index') : undefined}
-                />
+            </Section>
+
+            {/* Inventory Alerts. */}
+            <Section title="Inventory Alerts">
                 <KpiCard
                     label="Low stock products"
                     value={kpis?.low_stock_products ?? 0}
                     accent={kpis?.low_stock_products > 0 ? 'amber' : 'slate'}
                     href={can('inventory.view') ? route('inventory.low-stock') : undefined}
                 />
-                <KpiCard
-                    label="Active customers (MTD)"
-                    value={kpis?.active_customers_this_month ?? 0}
-                    hint="Distinct customers"
-                    href={can('customers.view') ? route('customers.index') : undefined}
-                />
-            </div>
+            </Section>
 
-            {/* Quick actions */}
-            <div className="mt-5 flex flex-wrap gap-2">
-                {can('orders.create') && <QuickAction href={route('orders.create')} label="Create order" icon="🧾" />}
-                {can('customers.create') && <QuickAction href={route('customers.create')} label="Add customer" icon="👤" />}
-                {can('products.create') && <QuickAction href={route('products.create')} label="Add product" icon="📦" />}
-                {can('purchases.create') && <QuickAction href={route('purchase-invoices.create')} label="Add purchase invoice" icon="🧮" />}
-                {can('expenses.create') && <QuickAction href={route('expenses.create')} label="Record expense" icon="💸" />}
-                {can('shipping.view') && <QuickAction href={route('shipping.delayed')} label="Delayed shipments" icon="🚚" />}
-            </div>
+            {/* Support / Tickets — server only sends open_tickets when
+                the user has tickets.view, so this section collapses
+                automatically for users without permission. */}
+            {canViewTickets && kpis?.open_tickets != null && (
+                <Section title="Support / Tickets">
+                    <KpiCard
+                        label="Open tickets"
+                        value={kpis?.open_tickets ?? 0}
+                        hint="open + in progress"
+                        accent={kpis?.open_tickets > 0 ? 'amber' : 'slate'}
+                        href={route('tickets.index')}
+                    />
+                </Section>
+            )}
+
+            {/* Quick Actions — permission-aware shortcuts to the most
+                common entry points across the app. */}
+            <section className="mt-6">
+                <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Quick Actions</h2>
+                <div className="flex flex-wrap gap-2">
+                    {can('orders.create') && <QuickAction href={route('orders.create')} label="Create order" icon="🧾" />}
+                    {can('shipping.view') && <QuickAction href={route('shipping.ready-to-pack')} label="Ready to pack" icon="📦" />}
+                    {can('shipping.view') && <QuickAction href={route('shipping.ready-to-ship')} label="Ready to ship" icon="🚚" />}
+                    {can('shipping.print_label') && <QuickAction href={route('shipping-labels.index')} label="Print labels" icon="🖨️" />}
+                    {can('products.create') && <QuickAction href={route('products.create')} label="Add product" icon="📦" />}
+                    {can('customers.create') && <QuickAction href={route('customers.create')} label="Add customer" icon="👤" />}
+                    {can('tickets.create') && <QuickAction href={route('tickets.create')} label="Open ticket" icon="🎫" />}
+                    {can('expenses.create') && <QuickAction href={route('expenses.create')} label="Record expense" icon="💸" />}
+                    {can.any(['orders.import', 'orders.export', 'products.import', 'products.export', 'expenses.export']) && (
+                        <QuickAction href={route('import-export.index')} label="Import / Export" icon="📤" />
+                    )}
+                </div>
+            </section>
 
             {/* Charts row */}
             <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -322,42 +398,44 @@ export default function Dashboard({ kpis, charts, tables, alerts }) {
                     </div>
                 </Card>
 
-                <Card title="Latest orders" action={<Link href={route('orders.index')} className="text-xs text-indigo-600 hover:underline">All orders →</Link>} padded={false}>
-                    {tables?.latest_orders?.length ? (
-                        <div className="overflow-x-auto">
-                            <table className="min-w-full text-xs">
-                                <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
-                                    <tr>
-                                        <th className="px-3 py-2 text-left">Order</th>
-                                        <th className="px-3 py-2 text-left">Customer</th>
-                                        <th className="px-3 py-2 text-left">Status</th>
-                                        <th className="px-3 py-2 text-right">Total</th>
-                                        <th className="px-3 py-2 text-left">Collection</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    {tables.latest_orders.map((o) => (
-                                        <tr key={o.id} className="hover:bg-slate-50">
-                                            <td className="whitespace-nowrap px-3 py-1.5">
-                                                <Link href={route('orders.show', o.id)} className="font-medium text-indigo-600 hover:underline">
-                                                    {o.order_number}
-                                                </Link>
-                                            </td>
-                                            <td className="px-3 py-1.5 text-slate-700">{o.customer_name}</td>
-                                            <td className="px-3 py-1.5"><StatusBadge value={o.status} /></td>
-                                            <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-slate-700">
-                                                <Money value={o.total_amount} sym={sym} />
-                                            </td>
-                                            <td className="px-3 py-1.5"><StatusBadge value={o.collection_status} /></td>
+                {canViewOrders && (
+                    <Card title="Latest orders" action={<Link href={route('orders.index')} className="text-xs text-indigo-600 hover:underline">All orders →</Link>} padded={false}>
+                        {tables?.latest_orders?.length ? (
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full text-xs">
+                                    <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left">Order</th>
+                                            <th className="px-3 py-2 text-left">Customer</th>
+                                            <th className="px-3 py-2 text-left">Status</th>
+                                            <th className="px-3 py-2 text-right">Total</th>
+                                            <th className="px-3 py-2 text-left">Collection</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    ) : (
-                        <div className="p-4"><EmptyState text="No orders yet — create your first one." /></div>
-                    )}
-                </Card>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {tables.latest_orders.map((o) => (
+                                            <tr key={o.id} className="hover:bg-slate-50">
+                                                <td className="whitespace-nowrap px-3 py-1.5">
+                                                    <Link href={route('orders.show', o.id)} className="font-medium text-indigo-600 hover:underline">
+                                                        {o.order_number}
+                                                    </Link>
+                                                </td>
+                                                <td className="px-3 py-1.5 text-slate-700">{o.customer_name}</td>
+                                                <td className="px-3 py-1.5"><StatusBadge value={o.status} /></td>
+                                                <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-slate-700">
+                                                    <Money value={o.total_amount} sym={sym} />
+                                                </td>
+                                                <td className="px-3 py-1.5"><StatusBadge value={o.collection_status} /></td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <div className="p-4"><EmptyState text="No orders yet — create your first one." /></div>
+                        )}
+                    </Card>
+                )}
 
                 <Card title="Low stock" action={<Link href={route('inventory.low-stock')} className="text-xs text-indigo-600 hover:underline">View all →</Link>} padded={false}>
                     {tables?.low_stock?.length ? (
