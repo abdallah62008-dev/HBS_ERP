@@ -10,6 +10,9 @@ use App\Models\ShippingCompany;
 use App\Models\ShippingLabel;
 use App\Models\ShippingRate;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Mpdf\Mpdf;
+use Mpdf\Config\ConfigVariables;
+use Mpdf\Config\FontVariables;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -117,17 +120,72 @@ class ShippingService
         $barcodeValue = $tracking;
         $qrValue = url("/orders/{$order->id}");
 
-        $pdf = Pdf::loadView('pdf.shipping_label', [
+        // Phase 6.5 — Render the shipping label with mPDF (not DomPDF).
+        // DomPDF cannot run the Unicode Bidi Algorithm or do Arabic
+        // letter-shaping, so customer names / addresses written in
+        // Arabic appeared visually reversed and disconnected (سموحة
+        // → هحومس). mPDF has native bidi + shaping and ships a
+        // built-in Code 128 barcode renderer, so we use it for this
+        // one template. Other PDFs in the app keep using DomPDF.
+        $html = view('pdf.shipping_label', [
             'order' => $order,
             'shipment' => $shipment,
             'tracking' => $tracking,
             'barcode_value' => $barcodeValue,
             'qr_value' => $qrValue,
             'currency_symbol' => SettingsService::get('currency_symbol', ''),
-        ])->setPaper([0, 0, 288, 432]); // 4×6 inches @72dpi = 288×432 pt
+        ])->render();
+
+        // mPDF font registration: merge Cairo into the default font
+        // catalogue. Files live in storage/fonts/ and are committed to
+        // the repo (storage/fonts/.gitignore allows the source TTFs).
+        $defaults = (new ConfigVariables())->getDefaults();
+        $fontDirs = $defaults['fontDir'];
+        $fontData = (new FontVariables())->getDefaults()['fontdata'];
+
+        $mpdf = new Mpdf([
+            // 4×6 inches in mm: 4 * 25.4 = 101.6, 6 * 25.4 = 152.4.
+            'format' => [101.6, 152.4],
+            'orientation' => 'P',
+            'margin_top' => 3,
+            'margin_bottom' => 3,
+            'margin_left' => 5,
+            'margin_right' => 5,
+            'margin_header' => 0,
+            'margin_footer' => 0,
+            'fontDir' => array_merge($fontDirs, [storage_path('fonts')]),
+            'fontdata' => $fontData + [
+                // Cairo Latin subset for Latin / digits.
+                'cairolatin' => [
+                    'R' => 'Cairo-Latin-Regular.ttf',
+                    'B' => 'Cairo-Latin-Bold.ttf',
+                ],
+                // For Arabic we rely on mPDF's bundled DejaVu Sans
+                // (already in $fontData defaults). Tried Amiri and
+                // Noto Naskh Arabic first — both ship with GPOS
+                // Lookup Type 5 Format 3 (advanced mark-to-ligature
+                // positioning) which mPDF 8.3 doesn't parse and
+                // throws on. The previous fontsource "Cairo Arabic"
+                // subset rendered fine but was missing glyphs (kaf
+                // inside الإسكندرية came out wrong). DejaVu Sans
+                // ships with mPDF, has full Arabic coverage with
+                // proper letter-joining via GSUB, and is the only
+                // mPDF-compatible Arabic-capable font we have.
+            ],
+            'default_font' => 'cairolatin',
+            'default_font_size' => 9,
+            'autoScriptToLang' => true,
+            'autoLangToFont' => true,
+        ]);
+
+        // Document direction stays LTR; per-element direction comes
+        // from the .rtl-text class in the template.
+        $mpdf->SetDirectionality('ltr');
+        $mpdf->WriteHTML($html);
+        $pdfBytes = $mpdf->Output('', 'S');
 
         $relativePath = "shipping-labels/{$order->id}/" . now()->format('Ymd-His') . "-{$tracking}.pdf";
-        Storage::disk('public')->put($relativePath, $pdf->output());
+        Storage::disk('public')->put($relativePath, $pdfBytes);
 
         $label = ShippingLabel::create([
             'order_id' => $order->id,

@@ -11,7 +11,9 @@
 !.gitignore
 
 # Allow source fonts (committed; license: SIL OFL).
-!Cairo-Arabic-Regular.ttf
-!Cairo-Arabic-Bold.ttf
+# Arabic is handled by mPDF's bundled DejaVu Sans, so no Arabic
+# TTF lives here (Phase 6.5 — earlier Cairo "arabic" subset had
+# missing glyphs; tested replacements like Amiri / Noto Naskh
+# Arabic, but mPDF 8.3 cannot parse their advanced GPOS tables).
 !Cairo-Latin-Regular.ttf
 !Cairo-Latin-Bold.ttf
