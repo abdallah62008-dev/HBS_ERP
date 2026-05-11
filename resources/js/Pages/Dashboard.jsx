@@ -10,9 +10,15 @@ import { Head, Link, usePage } from '@inertiajs/react';
  * /marketer/dashboard so they never reach this view.
  *
  * KPIs are grouped into workflow sections — Today Snapshot, Sales
- * Operations, Fulfillment Operations, Inventory Alerts, Support — so
- * each role can scan the row that matters to them. Permission-locked
- * sections collapse to nothing when the user lacks visibility.
+ * Operations, Fulfillment Operations, Inventory Alerts, Finance,
+ * Support — so each role can scan the row that matters to them.
+ * Permission-locked sections collapse to nothing when the user lacks
+ * visibility.
+ *
+ * Period selector (`?period=today|7d|mtd|fytd`) re-frames the Today
+ * Snapshot tiles only. Aggregate MTD-named tiles (Delivery Rate,
+ * AOV, Expenses) keep their MTD framing because the metric name
+ * itself implies the window.
  */
 
 /* ────────────────────── Building blocks ────────────────────── */
@@ -105,10 +111,11 @@ function MiniBarChart({ series, valueFormatter, color = '#4f46e5' }) {
 }
 
 /**
- * Horizontal bar list — used for status distribution (donut alternative).
+ * Horizontal bar list — used for status distribution and the
+ * shipments-by-status widget. Same pattern, different colour accent.
  */
-function HBarList({ data, total }) {
-    if (!data?.length) return <EmptyState text="No orders this month yet" />;
+function HBarList({ data, total, barColor = 'bg-indigo-500' }) {
+    if (!data?.length) return <EmptyState text="Nothing to show yet" />;
     const max = Math.max(...data.map((d) => d.count), 1);
     return (
         <ul className="space-y-2">
@@ -124,7 +131,7 @@ function HBarList({ data, total }) {
                             </span>
                         </div>
                         <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                            <div className="h-full rounded-full bg-indigo-500" style={{ width: pct + '%' }} />
+                            <div className={'h-full rounded-full ' + barColor} style={{ width: pct + '%' }} />
                         </div>
                     </li>
                 );
@@ -202,24 +209,77 @@ function Section({ title, children }) {
     );
 }
 
+/**
+ * Period selector — 4 segmented buttons that drive `?period=` on
+ * the dashboard URL. The current value is highlighted; clicking a
+ * different value triggers a normal Inertia visit.
+ *
+ * URL is the source of truth (shareable / bookmarkable). No local
+ * storage persistence — that would require an extra round-trip on
+ * each dashboard visit.
+ */
+function PeriodSelector({ value, options, dashboardUrl }) {
+    const labelFor = (key) => ({
+        today: 'Today',
+        '7d': '7d',
+        mtd: 'MTD',
+        fytd: 'FYTD',
+    }[key] ?? key);
+    return (
+        <div role="group" aria-label="Date period" className="inline-flex rounded-md border border-slate-200 bg-white p-0.5 shadow-sm">
+            {options.map((opt) => {
+                const active = opt === value;
+                const classes = active
+                    ? 'rounded bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white'
+                    : 'rounded px-2.5 py-1 text-xs font-medium text-slate-600 hover:text-slate-900';
+                return (
+                    <Link
+                        key={opt}
+                        href={dashboardUrl + (opt === 'today' ? '' : '?period=' + opt)}
+                        className={classes}
+                        preserveScroll
+                        aria-current={active ? 'page' : undefined}
+                    >
+                        {labelFor(opt)}
+                    </Link>
+                );
+            })}
+        </div>
+    );
+}
+
 /* ────────────────────── Page ────────────────────── */
 
-export default function Dashboard({ kpis, charts, tables, alerts, permissions }) {
+export default function Dashboard({ period, kpis, widgets, charts, tables, alerts, permissions }) {
     const { props } = usePage();
     const user = props.auth?.user;
     const sym = props.app?.currency_symbol ?? '';
     const can = useCan();
 
-    const sales = deltaParts(Number(kpis?.sales_today || 0), Number(kpis?.sales_yesterday || 0));
-    const orders = deltaParts(Number(kpis?.orders_today || 0), Number(kpis?.orders_yesterday || 0));
+    const isToday = period?.value === 'today';
+    const periodLabel = period?.label ?? 'Today';
+
+    // Yesterday-comparison delta is only meaningful for period=today.
+    // For other periods the server omits the comparison values.
+    const ordersDelta = isToday ? deltaParts(Number(kpis?.orders_period || 0), Number(kpis?.orders_compare || 0)) : null;
+    const salesDelta = isToday ? deltaParts(Number(kpis?.sales_period || 0), Number(kpis?.sales_compare || 0)) : null;
 
     const statusTotal = (charts?.status_distribution ?? []).reduce((acc, d) => acc + d.count, 0);
+    const shipmentsTotal = (widgets?.shipments_by_status ?? []).reduce((acc, d) => acc + d.count, 0);
 
-    // latest_orders is server-gated by orders.view — when the server
-    // omits/empties it, hide the Card entirely rather than show an empty
-    // state. The empty state is reserved for "permitted but no data".
     const canViewOrders = permissions?.orders_view ?? can('orders.view');
     const canViewTickets = permissions?.tickets_view ?? can('tickets.view');
+    const canViewShipping = permissions?.shipping_view ?? can('shipping.view');
+    const canViewInventory = permissions?.inventory_view ?? can('inventory.view');
+    const canViewExpenses = permissions?.expenses_view ?? can('expenses.view');
+
+    const deliveryRate = kpis?.delivery_rate_mtd; // null when no resolved orders
+    const deliveryRateText = deliveryRate == null ? '—' : `${deliveryRate}%`;
+    const deliveryRateHint = kpis?.delivery_rate_mtd_resolved != null
+        ? `${kpis.delivery_rate_mtd_delivered ?? 0} / ${kpis.delivery_rate_mtd_resolved} resolved`
+        : undefined;
+
+    const dashboardUrl = route('dashboard');
 
     return (
         <AuthenticatedLayout header="Dashboard">
@@ -234,51 +294,59 @@ export default function Dashboard({ kpis, charts, tables, alerts, permissions })
                         {user?.role?.name} · {props.app?.country} · {props.app?.currency_code}
                     </p>
                 </div>
-                <p className="text-xs text-slate-400">
-                    {new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                </p>
+                <div className="flex items-center gap-3">
+                    <PeriodSelector
+                        value={period?.value ?? 'today'}
+                        options={period?.options ?? ['today', '7d', 'mtd', 'fytd']}
+                        dashboardUrl={dashboardUrl}
+                    />
+                    <p className="hidden text-xs text-slate-400 sm:block">
+                        {new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                    </p>
+                </div>
             </div>
 
-            {/* Today Snapshot — the headline operational row. */}
-            <Section title="Today Snapshot">
+            {/* Today Snapshot — period-respecting tiles. Labels switch
+                between Today / 7d / MTD / FYTD based on the selector. */}
+            <Section title={`${periodLabel} Snapshot`}>
                 <KpiCard
-                    label="Orders today"
-                    value={kpis?.orders_today ?? 0}
-                    deltaText={orders.text}
-                    deltaTone={orders.tone}
+                    label={`Orders ${periodLabel}`}
+                    value={kpis?.orders_period ?? 0}
+                    deltaText={ordersDelta?.text}
+                    deltaTone={ordersDelta?.tone}
                     accent="indigo"
                     href={can('orders.view') ? route('orders.index') : undefined}
                 />
                 <KpiCard
-                    label="Sales today"
-                    value={<Money value={kpis?.sales_today} sym={sym} />}
-                    deltaText={sales.text}
-                    deltaTone={sales.tone}
+                    label={`Sales ${periodLabel}`}
+                    value={<Money value={kpis?.sales_period} sym={sym} />}
+                    deltaText={salesDelta?.text}
+                    deltaTone={salesDelta?.tone}
                     accent="emerald"
                     href={can('reports.sales') ? route('reports.sales') : undefined}
                 />
                 <KpiCard
-                    label="Delivered today"
-                    value={kpis?.delivered_today ?? 0}
-                    hint={kpis?.delivered_mtd != null ? `${kpis.delivered_mtd} MTD` : undefined}
+                    label={`Delivered ${periodLabel}`}
+                    value={kpis?.delivered_period ?? 0}
+                    hint={isToday && kpis?.delivered_mtd != null ? `${kpis.delivered_mtd} MTD` : undefined}
                     accent="emerald"
                     href={can('orders.view') ? route('orders.index') : undefined}
                 />
                 <KpiCard
-                    label="Collections today"
-                    value={<Money value={kpis?.collections_today_amount} sym={sym} />}
-                    hint={(kpis?.collections_today_count ?? 0) + ' collected'}
+                    label={`Collections ${periodLabel}`}
+                    value={<Money value={kpis?.collections_period_amount} sym={sym} />}
+                    hint={(kpis?.collections_period_count ?? 0) + ' collected'}
                     accent="emerald"
                     href={can('collections.view') ? route('collections.index') : undefined}
                 />
                 <KpiCard
-                    label="Returns today"
-                    value={kpis?.returns_today ?? 0}
+                    label={`Returns ${periodLabel}`}
+                    value={kpis?.returns_period ?? 0}
                     href={can('returns.view') ? route('returns.index') : undefined}
                 />
             </Section>
 
-            {/* Sales Operations — pipeline + customer signals. */}
+            {/* Sales Operations — pipeline + quality + average ticket. */}
             <Section title="Sales Operations">
                 <KpiCard
                     label="Pending orders"
@@ -292,6 +360,24 @@ export default function Dashboard({ kpis, charts, tables, alerts, permissions })
                     hint="Distinct customers"
                     href={can('customers.view') ? route('customers.index') : undefined}
                 />
+                {canViewOrders && (
+                    <KpiCard
+                        label="Delivery rate (MTD)"
+                        value={deliveryRateText}
+                        hint={deliveryRateHint}
+                        accent="emerald"
+                        href={can('reports.profit') ? route('reports.profit') : undefined}
+                    />
+                )}
+                {canViewOrders && (
+                    <KpiCard
+                        label="Avg order value (MTD)"
+                        value={<Money value={kpis?.avg_order_value_mtd} sym={sym} />}
+                        hint={(kpis?.avg_order_value_mtd_count ?? 0) + ' orders this month'}
+                        accent="indigo"
+                        href={can('reports.sales') ? route('reports.sales') : undefined}
+                    />
+                )}
             </Section>
 
             {/* Fulfillment Operations — what's in flight right now. */}
@@ -323,7 +409,7 @@ export default function Dashboard({ kpis, charts, tables, alerts, permissions })
                 />
             </Section>
 
-            {/* Inventory Alerts. */}
+            {/* Inventory Alerts — including the new Out of Stock tile. */}
             <Section title="Inventory Alerts">
                 <KpiCard
                     label="Low stock products"
@@ -331,11 +417,29 @@ export default function Dashboard({ kpis, charts, tables, alerts, permissions })
                     accent={kpis?.low_stock_products > 0 ? 'amber' : 'slate'}
                     href={can('inventory.view') ? route('inventory.low-stock') : undefined}
                 />
+                {canViewInventory && (
+                    <KpiCard
+                        label="Out of stock"
+                        value={kpis?.out_of_stock ?? 0}
+                        hint="on_hand ≤ 0"
+                        accent={kpis?.out_of_stock > 0 ? 'red' : 'slate'}
+                        href={can('inventory.view') ? route('inventory.low-stock') : undefined}
+                    />
+                )}
             </Section>
 
-            {/* Support / Tickets — server only sends open_tickets when
-                the user has tickets.view, so this section collapses
-                automatically for users without permission. */}
+            {/* Finance Snapshot — Expenses MTD (only when permitted). */}
+            {canViewExpenses && kpis?.expenses_mtd != null && (
+                <Section title="Finance Snapshot">
+                    <KpiCard
+                        label="Expenses (MTD)"
+                        value={<Money value={kpis?.expenses_mtd} sym={sym} />}
+                        href={route('expenses.index')}
+                    />
+                </Section>
+            )}
+
+            {/* Support / Tickets — only when permitted (Phase 1 behavior). */}
             {canViewTickets && kpis?.open_tickets != null && (
                 <Section title="Support / Tickets">
                     <KpiCard
@@ -348,8 +452,7 @@ export default function Dashboard({ kpis, charts, tables, alerts, permissions })
                 </Section>
             )}
 
-            {/* Quick Actions — permission-aware shortcuts to the most
-                common entry points across the app. */}
+            {/* Quick Actions. */}
             <section className="mt-6">
                 <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Quick Actions</h2>
                 <div className="flex flex-wrap gap-2">
@@ -367,7 +470,9 @@ export default function Dashboard({ kpis, charts, tables, alerts, permissions })
                 </div>
             </section>
 
-            {/* Charts row */}
+            {/* Charts + Shipments-by-Status widget. The widget replaces
+                one of the chart cards when shipping permissions exist;
+                otherwise the row stays at 3 columns. */}
             <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <Card title="Orders trend (7 days)">
                     <MiniBarChart series={charts?.orders_trend} color="#6366f1" />
@@ -384,11 +489,24 @@ export default function Dashboard({ kpis, charts, tables, alerts, permissions })
                 </Card>
             </div>
 
-            {/* Alerts + tables */}
+            {canViewShipping && widgets?.shipments_by_status?.length > 0 && (
+                <div className="mt-4">
+                    <Card title="Shipments by status">
+                        <HBarList
+                            data={widgets.shipments_by_status}
+                            total={shipmentsTotal}
+                            barColor="bg-sky-500"
+                        />
+                    </Card>
+                </div>
+            )}
+
+            {/* Alerts + tables. */}
             <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <Card title="Needs attention" padded={false}>
                     <div className="px-2 py-2">
                         <AlertRow label="Delayed shipments" count={alerts?.delayed_shipments ?? 0} href={route('shipping.delayed')} tone="red" />
+                        <AlertRow label="Out of stock" count={alerts?.out_of_stock_products ?? 0} href={route('inventory.low-stock')} tone="red" />
                         <AlertRow label="Low stock products" count={alerts?.low_stock_products ?? 0} href={route('inventory.low-stock')} tone="amber" />
                         <AlertRow label="Returns pending inspection" count={alerts?.returns_pending_inspection ?? 0} href={route('returns.index')} />
                         <AlertRow label="Pending collections" count={alerts?.pending_collections ?? 0} href={route('collections.index')} />
