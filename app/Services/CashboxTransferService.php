@@ -31,6 +31,18 @@ class CashboxTransferService
     /**
      * Create a transfer + its two cashbox_transactions.
      *
+     * Concurrency:
+     * Both cashboxes are row-locked inside the transaction, in a
+     * deterministic order (ascending id) to avoid deadlocks when two
+     * users transfer between the same pair simultaneously. The balance
+     * check is re-run AFTER the lock so two concurrent transfers from
+     * the same source can't both pass `assertSufficientBalanceIfNeeded`
+     * and overdraft a box flagged `allow_negative_balance = false`.
+     *
+     * Static (config-level) checks — different cashboxes, same currency,
+     * positive amount, active cashboxes — stay outside the transaction
+     * so the caller gets a clean error before any lock is acquired.
+     *
      * @param  array{from_cashbox_id:int|string, to_cashbox_id:int|string, amount:numeric, occurred_at?:?string, reason?:?string}  $data
      */
     public function createTransfer(array $data): CashboxTransfer
@@ -43,26 +55,40 @@ class CashboxTransferService
             : now();
         $reason = isset($data['reason']) ? (string) $data['reason'] : null;
 
-        // Run every guard BEFORE the transaction so a clean exception is
-        // surfaced to the controller without leaving a half-written row.
+        // Static checks outside the transaction.
         $this->assertDifferentCashboxes($from, $to);
         $this->assertCashboxesActive($from, $to);
         $this->assertSameCurrency($from, $to);
         $this->assertPositiveAmount($amount);
-        $this->assertSufficientBalanceIfNeeded($from, $amount);
 
         return DB::transaction(function () use ($from, $to, $amount, $occurredAt, $reason) {
+            // Lock both cashbox rows in id-ascending order so concurrent
+            // transfers between the same pair (A→B and B→A) acquire locks
+            // in the same order and cannot deadlock.
+            $locked = Cashbox::query()
+                ->whereIn('id', [$from->id, $to->id])
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+
+            $lockedFrom = $locked->get($from->id) ?? Cashbox::findOrFail($from->id);
+            $lockedTo = $locked->get($to->id) ?? Cashbox::findOrFail($to->id);
+
+            // Re-check sufficient balance against the locked source row.
+            $this->assertSufficientBalanceIfNeeded($lockedFrom, $amount);
+
             $transfer = CashboxTransfer::create([
-                'from_cashbox_id' => $from->id,
-                'to_cashbox_id' => $to->id,
+                'from_cashbox_id' => $lockedFrom->id,
+                'to_cashbox_id' => $lockedTo->id,
                 'amount' => round($amount, 2),
                 'occurred_at' => $occurredAt,
                 'reason' => $reason,
                 'created_by' => Auth::id(),
             ]);
 
-            $this->createOutTransaction($transfer, $from, $amount, $occurredAt);
-            $this->createInTransaction($transfer, $to, $amount, $occurredAt);
+            $this->createOutTransaction($transfer, $lockedFrom, $amount, $occurredAt);
+            $this->createInTransaction($transfer, $lockedTo, $amount, $occurredAt);
 
             AuditLogService::logModelChange($transfer, 'created', self::MODULE);
 

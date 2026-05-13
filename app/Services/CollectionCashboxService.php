@@ -35,6 +35,18 @@ class CollectionCashboxService
     /**
      * Post a collection's collected amount to the chosen cashbox.
      *
+     * Concurrency:
+     * The critical guards (double-post + amount + status) run INSIDE the
+     * transaction on a row-locked Collection so two concurrent post
+     * requests cannot both pass `preventDoublePosting`. The first
+     * acquires `lockForUpdate`, writes the cashbox transaction, stamps
+     * the collection, and commits; the second blocks until the first
+     * commits, then re-reads the row, sees `cashbox_transaction_id != null`,
+     * and refuses.
+     *
+     * Cheap cashbox/payment-method active checks stay outside the
+     * transaction so the caller gets a clean error before locking.
+     *
      * @param  array{cashbox_id:int|string, payment_method_id:int|string, amount?:numeric, occurred_at?:?string}  $data
      */
     public function postCollectionToCashbox(Collection $collection, array $data): Collection
@@ -42,25 +54,36 @@ class CollectionCashboxService
         $cashbox = Cashbox::findOrFail((int) $data['cashbox_id']);
         $paymentMethod = PaymentMethod::findOrFail((int) $data['payment_method_id']);
 
-        // Override `amount_collected` if the caller passed one (settlement
-        // flow may post a different amount than what's currently stored).
-        if (array_key_exists('amount', $data) && $data['amount'] !== null && $data['amount'] !== '') {
-            $collection->amount_collected = round((float) $data['amount'], 2);
-        }
-
-        $occurredAt = ! empty($data['occurred_at'])
-            ? Carbon::parse($data['occurred_at'])
-            : ($collection->settlement_date ? $collection->settlement_date->copy() : now());
-
-        // Guards run BEFORE the transaction.
-        $this->preventDoublePosting($collection);
-        $this->validateCollectionCanBePosted($collection);
+        // Cheap checks outside the transaction.
         $this->validateCashboxActive($cashbox);
         $this->validatePaymentMethodActive($paymentMethod);
 
-        return DB::transaction(function () use ($collection, $cashbox, $paymentMethod, $occurredAt) {
-            $tx = $this->createCashboxTransaction($collection, $cashbox, $paymentMethod, $occurredAt);
-            return $this->updateCollectionCashboxFields($collection, $cashbox, $paymentMethod, $tx);
+        $defaultOccurredAt = ! empty($data['occurred_at'])
+            ? Carbon::parse($data['occurred_at'])
+            : null;
+
+        return DB::transaction(function () use ($collection, $cashbox, $paymentMethod, $data, $defaultOccurredAt) {
+            // Lock the collection row to serialise concurrent post attempts.
+            $locked = Collection::query()
+                ->lockForUpdate()
+                ->findOrFail($collection->id);
+
+            // Override `amount_collected` if the caller passed one
+            // (settlement flow may post a different amount than what's
+            // currently stored). Done on the locked row.
+            if (array_key_exists('amount', $data) && $data['amount'] !== null && $data['amount'] !== '') {
+                $locked->amount_collected = round((float) $data['amount'], 2);
+            }
+
+            $occurredAt = $defaultOccurredAt
+                ?? ($locked->settlement_date ? $locked->settlement_date->copy() : now());
+
+            // Critical guards re-run on the locked row.
+            $this->preventDoublePosting($locked);
+            $this->validateCollectionCanBePosted($locked);
+
+            $tx = $this->createCashboxTransaction($locked, $cashbox, $paymentMethod, $occurredAt);
+            return $this->updateCollectionCashboxFields($locked, $cashbox, $paymentMethod, $tx);
         });
     }
 

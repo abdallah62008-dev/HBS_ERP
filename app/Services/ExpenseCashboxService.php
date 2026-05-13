@@ -36,6 +36,17 @@ class ExpenseCashboxService
     /**
      * Post an expense's amount as a cashbox OUT transaction.
      *
+     * Concurrency:
+     * Two layers of `lockForUpdate` inside the transaction —
+     *   1. The expense row, so two concurrent posts on the same expense
+     *      can't both pass `preventDoublePosting`.
+     *   2. The cashbox row, so two concurrent posts on the same cashbox
+     *      can't both pass `validateSufficientBalanceIfNeeded` and
+     *      overdraft a box flagged `allow_negative_balance = false`.
+     *
+     * Cheap, non-racy checks (active flags, currency match) stay outside
+     * the transaction so the caller gets a clean error before locking.
+     *
      * @param  array{cashbox_id:int|string, payment_method_id:int|string, amount?:numeric, occurred_at?:?string}  $data
      */
     public function postExpenseToCashbox(Expense $expense, array $data): Expense
@@ -43,25 +54,41 @@ class ExpenseCashboxService
         $cashbox = Cashbox::findOrFail((int) $data['cashbox_id']);
         $paymentMethod = PaymentMethod::findOrFail((int) $data['payment_method_id']);
 
-        if (array_key_exists('amount', $data) && $data['amount'] !== null && $data['amount'] !== '') {
-            $expense->amount = round((float) $data['amount'], 2);
-        }
-
-        $occurredAt = ! empty($data['occurred_at'])
-            ? Carbon::parse($data['occurred_at'])
-            : ($expense->expense_date ? $expense->expense_date->copy() : now());
-
-        // Guards before the transaction.
-        $this->preventDoublePosting($expense);
-        $this->validateExpenseCanBePosted($expense);
+        // Cheap checks outside the transaction.
         $this->validateCashboxActive($cashbox);
         $this->validatePaymentMethodActive($paymentMethod);
         $this->validateSameCurrency($expense, $cashbox);
-        $this->validateSufficientBalanceIfNeeded($cashbox, (float) $expense->amount);
 
-        return DB::transaction(function () use ($expense, $cashbox, $paymentMethod, $occurredAt) {
-            $tx = $this->createCashboxTransaction($expense, $cashbox, $paymentMethod, $occurredAt);
-            return $this->updateExpenseCashboxFields($expense, $cashbox, $paymentMethod, $tx);
+        $defaultOccurredAt = ! empty($data['occurred_at'])
+            ? Carbon::parse($data['occurred_at'])
+            : null;
+
+        return DB::transaction(function () use ($expense, $cashbox, $paymentMethod, $data, $defaultOccurredAt) {
+            // Lock the expense row first to serialise double-post attempts.
+            $lockedExpense = Expense::query()
+                ->lockForUpdate()
+                ->findOrFail($expense->id);
+
+            // Lock the cashbox row so the balance check below sees a
+            // stable, exclusive view of the ledger sum.
+            $lockedCashbox = Cashbox::query()
+                ->lockForUpdate()
+                ->findOrFail($cashbox->id);
+
+            if (array_key_exists('amount', $data) && $data['amount'] !== null && $data['amount'] !== '') {
+                $lockedExpense->amount = round((float) $data['amount'], 2);
+            }
+
+            $occurredAt = $defaultOccurredAt
+                ?? ($lockedExpense->expense_date ? $lockedExpense->expense_date->copy() : now());
+
+            // Critical guards re-run on the locked rows.
+            $this->preventDoublePosting($lockedExpense);
+            $this->validateExpenseCanBePosted($lockedExpense);
+            $this->validateSufficientBalanceIfNeeded($lockedCashbox, (float) $lockedExpense->amount);
+
+            $tx = $this->createCashboxTransaction($lockedExpense, $lockedCashbox, $paymentMethod, $occurredAt);
+            return $this->updateExpenseCashboxFields($lockedExpense, $lockedCashbox, $paymentMethod, $tx);
         });
     }
 

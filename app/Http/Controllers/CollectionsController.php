@@ -89,10 +89,20 @@ class CollectionsController extends Controller
             'cashbox_id' => ['nullable', 'integer', 'exists:cashboxes,id'],
         ]);
 
-        // Once a collection is posted, the cashbox + payment method
-        // become read-only — those values describe a real ledger row.
+        // Once a collection is posted, every financial field becomes
+        // read-only — those values describe a real ledger row. Editing
+        // them now would drift the collection row from its
+        // cashbox_transactions counterpart.
+        // Reversal / correction belongs to a future refund / adjustment
+        // phase; for now the operator must escalate.
         if ($collection->isPosted()) {
-            unset($data['cashbox_id'], $data['payment_method_id']);
+            unset(
+                $data['cashbox_id'],
+                $data['payment_method_id'],
+                $data['amount_collected'],
+                $data['settlement_date'],
+                $data['settlement_reference'],
+            );
         }
 
         $collection->fill([

@@ -44,6 +44,37 @@ class Cashbox extends Model
         'is_active' => 'boolean',
     ];
 
+    /* ────────────────────── Immutable-fields guard ────────────────────── */
+
+    /**
+     * Once the cashbox has any transactions, `currency_code` and
+     * `opening_balance` are immutable. The service strips these from
+     * the update payload, but this hook is defence-in-depth — any
+     * direct `Cashbox::update([...])` call from a job, console
+     * command, or future controller surfaces an exception instead of
+     * silently drifting the books.
+     */
+    protected static function booted(): void
+    {
+        static::updating(function (self $cashbox) {
+            if (! $cashbox->hasTransactions()) {
+                return;
+            }
+            if ($cashbox->isDirty('currency_code')) {
+                throw new \RuntimeException(
+                    "Cashbox #{$cashbox->id} currency_code is immutable after "
+                    . 'the first transaction.'
+                );
+            }
+            if ($cashbox->isDirty('opening_balance')) {
+                throw new \RuntimeException(
+                    "Cashbox #{$cashbox->id} opening_balance is immutable after "
+                    . 'the first transaction.'
+                );
+            }
+        });
+    }
+
     /* ────────────────────── Relations ────────────────────── */
 
     public function transactions(): HasMany

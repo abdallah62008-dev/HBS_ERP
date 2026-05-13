@@ -28,6 +28,17 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property ?int    $source_id
  * @property ?string $notes
  * @property ?int    $created_by
+ *
+ * Append-only contract:
+ *   - INSERT is allowed (the ledger grows).
+ *   - UPDATE is blocked by the booted() hook below.
+ *   - DELETE is blocked by the booted() hook below.
+ *   - Corrections are made by writing a new opposite-signed row whose
+ *     `notes` references the original. Never by mutation.
+ *
+ * Phase 0 finance docs ($docs/finance/PHASE_0_FINANCIAL_BUSINESS_RULES.md)
+ * treat this guarantee as structural. The guard below makes it a real
+ * runtime constraint, not just a comment.
  */
 class CashboxTransaction extends Model
 {
@@ -87,6 +98,30 @@ class CashboxTransaction extends Model
         'amount' => 'decimal:2',
         'occurred_at' => 'datetime',
     ];
+
+    /* ────────────────────── Append-only guard ────────────────────── */
+
+    /**
+     * Block every UPDATE and DELETE on an existing transaction row at
+     * the model layer. INSERT still flows through normally. See the
+     * class docblock for rationale.
+     */
+    protected static function booted(): void
+    {
+        static::updating(function (self $tx) {
+            throw new \RuntimeException(
+                'cashbox_transactions are append-only — row #' . $tx->id
+                . ' cannot be updated. Write a reversal entry instead.'
+            );
+        });
+
+        static::deleting(function (self $tx) {
+            throw new \RuntimeException(
+                'cashbox_transactions are append-only — row #' . $tx->id
+                . ' cannot be deleted. Write a reversal entry instead.'
+            );
+        });
+    }
 
     /* ────────────────────── Relations ────────────────────── */
 

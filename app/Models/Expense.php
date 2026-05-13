@@ -27,6 +27,31 @@ class Expense extends Model
         'cashbox_posted_at' => 'datetime',
     ];
 
+    /* ────────────────────── Delete guard ────────────────────── */
+
+    /**
+     * Block soft-delete (and force-delete) of a posted expense at the
+     * model layer. The controller already returns a flash error before
+     * calling delete, but this hook is defence-in-depth — a future
+     * console command, job, or seeder that calls `$expense->delete()`
+     * directly will surface the same error instead of silently
+     * orphaning a cashbox_transactions row.
+     *
+     * Phase 5+ refund / adjustment flow is the supported reversal path.
+     */
+    protected static function booted(): void
+    {
+        static::deleting(function (self $expense) {
+            if ($expense->isPosted()) {
+                throw new \RuntimeException(
+                    "Expense #{$expense->id} is posted to a cashbox "
+                    . '(transaction #' . $expense->cashbox_transaction_id . ') '
+                    . 'and cannot be deleted. Use a reversal flow.'
+                );
+            }
+        });
+    }
+
     /* ────────────────────── Relations ────────────────────── */
 
     public function category(): BelongsTo
