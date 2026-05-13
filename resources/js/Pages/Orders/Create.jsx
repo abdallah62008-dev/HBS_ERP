@@ -8,7 +8,7 @@ import useUnsavedChangesWarning from '@/Hooks/useUnsavedChangesWarning';
 import { Head, Link, useForm, usePage, router } from '@inertiajs/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-export default function OrderCreate({ products, categories = [], locations = [], default_country_code = 'EG', entry_code_preview = null, marketers = [] }) {
+export default function OrderCreate({ products, categories = [], locations = [], default_country_code = 'EG', entry_code_preview = null, marketers = [], can_view_profit = false }) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
     const can = useCan();
@@ -107,8 +107,15 @@ export default function OrderCreate({ products, categories = [], locations = [],
 
     /* Phase 5.9: live marketer profit preview when a marketer is selected
        and at least one item is in the cart. Re-fetches on debounce when
-       any of (marketer_id, items, prices) changes. */
+       any of (marketer_id, items, prices) changes.
+       Cost/profit gate: only fire the request when the operator has the
+       `orders.view_profit` permission. The backend would return 403
+       otherwise; bailing here avoids the noisy console error. */
     useEffect(() => {
+        if (!can_view_profit) {
+            setMarketerProfit(null);
+            return;
+        }
         if (!data.marketer_id || data.items.length === 0) {
             setMarketerProfit(null);
             return;
@@ -526,8 +533,11 @@ export default function OrderCreate({ products, categories = [], locations = [],
                                 ))}
                             </select>
                         </FormField>
-                        {/* Marketer profit preview block (Phase 5.9). Only renders once a marketer + items are present. */}
-                        {marketerProfit && marketerProfit.lines && (
+                        {/* Marketer profit preview block (Phase 5.9). Only renders once a marketer + items are present.
+                            Cost/profit gate: hidden for users without `orders.view_profit`
+                            (Order Agents, Warehouse Agents, Viewers, Marketers). The
+                            backing endpoint also enforces the same permission. */}
+                        {can_view_profit && marketerProfit && marketerProfit.lines && (
                             <div className="lg:col-span-2 rounded-md border border-emerald-200 bg-emerald-50 p-3">
                                 <div className="flex items-center justify-between text-xs font-semibold text-emerald-800">
                                     <span>Marketer profit preview</span>

@@ -31,8 +31,50 @@ class OrdersController extends Controller
         private readonly OrderStatusFlowService $statusFlow,
     ) {}
 
+    /**
+     * Sensitive cost/profit columns that must be hidden from users
+     * without the `orders.view_profit` permission. Used by every
+     * Inertia render path that serializes an Order or OrderItem.
+     *
+     * Hiding via `makeHidden` removes the fields from JSON output so
+     * they don't ship to the browser in page props — defence-in-depth
+     * on top of the React-side `can('orders.view_profit')` checks.
+     */
+    private const PROFIT_HIDDEN_ORDER_FIELDS = [
+        'net_profit',
+        'product_cost_total',
+        'marketer_profit',
+        'marketer_trade_total',
+    ];
+
+    private const PROFIT_HIDDEN_ORDER_ITEM_FIELDS = [
+        'marketer_trade_price',
+        'marketer_shipping_cost',
+        'marketer_vat_percent',
+    ];
+
+    /**
+     * Strip cost/profit fields from an Order (and its loaded items)
+     * when the current user lacks `orders.view_profit`. No-op for
+     * privileged users. Returns the same instance for chaining.
+     */
+    private function sanitizeProfitFor(?\App\Models\User $user, \App\Models\Order $order): \App\Models\Order
+    {
+        if ($user?->hasPermission('orders.view_profit')) {
+            return $order;
+        }
+        $order->makeHidden(self::PROFIT_HIDDEN_ORDER_FIELDS);
+        if ($order->relationLoaded('items')) {
+            foreach ($order->items as $item) {
+                $item->makeHidden(self::PROFIT_HIDDEN_ORDER_ITEM_FIELDS);
+            }
+        }
+        return $order;
+    }
+
     public function index(Request $request): Response
     {
+        $user = $request->user();
         $filters = $request->only(['q', 'status', 'risk_level', 'shipping_status']);
 
         $orders = Order::query()
@@ -69,15 +111,23 @@ class OrdersController extends Controller
             ->paginate(20)
             ->withQueryString();
 
+        // Strip cost/profit fields from each row when the user lacks
+        // `orders.view_profit`. Done after pagination so the data layer
+        // is unchanged but the Inertia JSON output is sanitized.
+        $orders->getCollection()->transform(fn (Order $o) => $this->sanitizeProfitFor($user, $o));
+
         return Inertia::render('Orders/Index', [
             'orders' => $orders,
             'filters' => $filters,
             'statuses' => Order::STATUSES,
+            'can_view_profit' => (bool) $user?->hasPermission('orders.view_profit'),
         ]);
     }
 
     public function create(Request $request): Response
     {
+        $user = $request->user();
+
         return Inertia::render('Orders/Create', [
             'products' => $this->productsForOrderEntry(),
             'categories' => Category::query()
@@ -90,7 +140,7 @@ class OrdersController extends Controller
             // OrderService will stamp on the new order. Only valid for the
             // staff-creates-order path (no marketer_id selected); marketer-
             // created orders override with marketers.code at save time.
-            'entry_code_preview' => $this->previewEntryCode($request->user()),
+            'entry_code_preview' => $this->previewEntryCode($user),
             // Phase 5.9: marketer list for the optional "On behalf of"
             // picker — drives the marketer-profit preview.
             'marketers' => \App\Models\Marketer::query()
@@ -105,6 +155,10 @@ class OrdersController extends Controller
                     'tier_name' => $m->priceTier?->name,
                 ])
                 ->all(),
+            // Cost/profit-visibility gate. The Marketer profit preview
+            // block on Create.jsx renders only when this is true; the
+            // backing preview endpoint is also gated by the same slug.
+            'can_view_profit' => (bool) $user?->hasPermission('orders.view_profit'),
         ]);
     }
 
@@ -220,7 +274,13 @@ class OrdersController extends Controller
         // entirely when it isn't valid (no returns.create permission,
         // or the order already has a return).
         $hasReturn = $order->returns()->exists();
-        $user = $order->relationLoaded('createdBy') ? request()->user() : request()->user();
+        $user = request()->user();
+
+        // Defence-in-depth: hide cost/profit columns from the JSON when
+        // the user lacks `orders.view_profit`. Show.jsx also gates the
+        // UI with `can('orders.view_profit')`, but stripping the fields
+        // here means they don't even reach the browser's page props.
+        $this->sanitizeProfitFor($user, $order);
 
         return Inertia::render('Orders/Show', [
             'order' => $order,
@@ -230,6 +290,7 @@ class OrdersController extends Controller
                 ->get(['id', 'name']),
             'return_conditions' => OrderReturn::CONDITIONS,
             'can_create_return' => (bool) ($user?->hasPermission('returns.create')),
+            'can_view_profit' => (bool) ($user?->hasPermission('orders.view_profit')),
             'has_return' => $hasReturn,
         ]);
     }
@@ -244,7 +305,13 @@ class OrdersController extends Controller
         // and the update route uses OrderStatusFlowService to create
         // the linked return atomically. We pass the same props the
         // Show page uses so the JSX can render identical fields.
+        $user = request()->user();
         $hasReturn = $order->returns()->exists();
+
+        // Strip cost/profit columns from the JSON when the user lacks
+        // `orders.view_profit`. Edit.jsx also gates the visible blocks
+        // with `can('orders.view_profit')`.
+        $this->sanitizeProfitFor($user, $order);
 
         return Inertia::render('Orders/Edit', [
             'order' => $order,
@@ -253,7 +320,8 @@ class OrdersController extends Controller
                 ->orderBy('name')
                 ->get(['id', 'name']),
             'return_conditions' => OrderReturn::CONDITIONS,
-            'can_create_return' => (bool) ($request = request())?->user()?->hasPermission('returns.create'),
+            'can_create_return' => (bool) $user?->hasPermission('returns.create'),
+            'can_view_profit' => (bool) $user?->hasPermission('orders.view_profit'),
             'has_return' => $hasReturn,
         ]);
     }
@@ -582,6 +650,17 @@ class OrdersController extends Controller
         Request $request,
         \App\Services\MarketerPricingResolver $resolver,
     ) {
+        // Cost/profit is sensitive — this endpoint returns per-line
+        // cost_price + profit + total. Gate on `orders.view_profit` so
+        // Order Agents, Warehouse Agents, Viewers, and Marketers (who
+        // have `orders.create` for the back-office Create page) cannot
+        // pull internal pricing data via direct API calls.
+        abort_unless(
+            $request->user()?->hasPermission('orders.view_profit'),
+            403,
+            'You do not have permission to view marketer profit.',
+        );
+
         $data = $request->validate([
             'marketer_id' => ['required', 'exists:marketers,id'],
             'items' => ['required', 'array', 'min:1'],

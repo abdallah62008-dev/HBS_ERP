@@ -10,6 +10,7 @@ export default function OrderEdit({
     return_reasons = [],
     return_conditions = ['Good', 'Damaged', 'Missing Parts', 'Unknown'],
     can_create_return = false,
+    can_view_profit = false,
     has_return = false,
 }) {
     const { props } = usePage();
@@ -99,7 +100,11 @@ export default function OrderEdit({
                     </div>
                 </section>
 
-                {order.marketer_id && order.marketer_profit !== null && (
+                {/* Cost/profit gate: render the marketer profit snapshot
+                    only when the operator has `orders.view_profit`. The
+                    backend also strips the `marketer_profit` column from
+                    the page props for users without this permission. */}
+                {can_view_profit && order.marketer_id && order.marketer_profit !== null && order.marketer_profit !== undefined && (
                     <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-5">
                         <div className="flex items-center justify-between">
                             <h2 className="text-sm font-semibold text-emerald-800">Marketer profit (Phase 5.9 snapshot)</h2>
