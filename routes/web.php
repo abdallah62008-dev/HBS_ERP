@@ -129,6 +129,12 @@ Route::middleware(['auth', 'active'])->group(function () {
         ->name('orders.check-duplicate');
     Route::middleware('permission:orders.create')->post('/orders/marketer-profit-preview', [OrdersController::class, 'marketerProfitPreview'])
         ->name('orders.marketer-profit-preview');
+    // Performance Phase 1 — server-side product search for the Create
+    // page. Replaces the previous "ship the entire active catalogue in
+    // the initial Inertia payload" pattern. Caps results at 50 max,
+    // default 25. Returns only safe fields (commit ea3e6e5 contract).
+    Route::middleware('permission:orders.create')->get('/orders/products/search', [OrdersController::class, 'searchProducts'])
+        ->name('orders.products.search');
 
     Route::middleware('permission:orders.view')->get('/orders', [OrdersController::class, 'index'])
         ->name('orders.index');

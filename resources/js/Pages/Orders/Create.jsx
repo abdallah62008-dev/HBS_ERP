@@ -24,6 +24,14 @@ export default function OrderCreate({ products, categories = [], locations = [],
     const [scanFeedback, setScanFeedback] = useState(null); // {tone:'success'|'error', text}
     const scanInputRef = useRef(null);
 
+    /* Performance Phase 1 — server-side product search.
+       The page used to receive the full active product catalogue in
+       the `products` prop and filter client-side. It now receives only
+       the first 25 (alphabetical) and we call /orders/products/search
+       on every search/category change (debounced 250 ms). */
+    const [searchedProducts, setSearchedProducts] = useState(products);
+    const [searchLoading, setSearchLoading] = useState(false);
+
     const defaultCountryName = (locations.find((c) => c.code === default_country_code)?.name_en) ?? 'Egypt';
 
     const { data, setData, post, processing, errors, transform, isDirty } = useForm({
@@ -189,22 +197,38 @@ export default function OrderCreate({ products, categories = [], locations = [],
      * Lookup helper used by the scan field. Matches against:
      *   - product SKU (exact, case-insensitive)
      *   - product barcode (exact, case-insensitive)
+     *
+     * Performance Phase 1: the page no longer holds the full catalogue,
+     * so we hit the server-side search endpoint with q=<scanned value>
+     * and pick the first exact SKU/barcode match.
      */
-    const findExactByScan = (raw) => {
-        const v = (raw || '').trim().toLowerCase();
+    const findExactByScan = async (raw) => {
+        const v = (raw || '').trim();
         if (!v) return null;
-        return (
-            products.find((p) => (p.sku || '').toLowerCase() === v) ||
-            products.find((p) => (p.barcode || '').toLowerCase() === v) ||
-            null
-        );
+        try {
+            const params = new URLSearchParams({ q: v, limit: '25' });
+            const r = await fetch(`${route('orders.products.search')}?${params.toString()}`, {
+                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!r.ok) return null;
+            const j = await r.json();
+            const list = Array.isArray(j.products) ? j.products : [];
+            const lower = v.toLowerCase();
+            return (
+                list.find((p) => (p.sku || '').toLowerCase() === lower) ||
+                list.find((p) => (p.barcode || '').toLowerCase() === lower) ||
+                null
+            );
+        } catch (e) {
+            return null;
+        }
     };
 
-    const handleScanKey = (e) => {
+    const handleScanKey = async (e) => {
         if (e.key !== 'Enter') return;
         e.preventDefault();
         const value = scanInput;
-        const match = findExactByScan(value);
+        const match = await findExactByScan(value);
         if (!match) {
             setScanFeedback({ tone: 'error', text: `No product matches "${value}".` });
             // Keep value in field so the operator can correct typos
@@ -218,24 +242,53 @@ export default function OrderCreate({ products, categories = [], locations = [],
     };
 
     /**
-     * Search-filter results. Limited to 25 visible rows so a long catalogue
-     * doesn't dump everything before the operator types anything.
+     * Performance Phase 1 — debounced server-side product search.
+     *
+     * On mount we already have the initial 25 products from the
+     * `products` prop. On every change to `searchQuery` or
+     * `categoryFilter` we re-fetch from `/orders/products/search`
+     * after a 250 ms debounce. The endpoint returns the SAME shape
+     * `productsForOrderEntry()` used to return, so the row component
+     * below doesn't need to change.
+     *
+     * Selected items (`data.items`) live in a separate state slice,
+     * so they stay stable when the search results change.
      */
-    const searchResults = useMemo(() => {
-        const q = searchQuery.trim().toLowerCase();
-        let list = products;
-        if (categoryFilter) {
-            list = list.filter((p) => Number(p.category_id) === Number(categoryFilter));
-        }
-        if (q) {
-            list = list.filter((p) =>
-                (p.name || '').toLowerCase().includes(q) ||
-                (p.sku || '').toLowerCase().includes(q) ||
-                (p.barcode || '').toLowerCase().includes(q)
-            );
-        }
-        return list.slice(0, 25);
-    }, [products, categoryFilter, searchQuery]);
+    useEffect(() => {
+        const controller = new AbortController();
+        const q = searchQuery.trim();
+        const params = new URLSearchParams();
+        if (q) params.set('q', q);
+        if (categoryFilter) params.set('category_id', String(categoryFilter));
+        params.set('limit', '25');
+
+        const timer = setTimeout(() => {
+            setSearchLoading(true);
+            fetch(`${route('orders.products.search')}?${params.toString()}`, {
+                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                signal: controller.signal,
+            })
+                .then((r) => (r.ok ? r.json() : Promise.reject(new Error('search failed'))))
+                .then((j) => {
+                    setSearchedProducts(Array.isArray(j.products) ? j.products : []);
+                })
+                .catch((err) => {
+                    if (err?.name !== 'AbortError') {
+                        // Silent fallback — keep whatever we had before.
+                    }
+                })
+                .finally(() => setSearchLoading(false));
+        }, 250);
+
+        return () => {
+            clearTimeout(timer);
+            controller.abort();
+        };
+    }, [searchQuery, categoryFilter]);
+
+    // Backwards-compatible alias so the existing JSX (`searchResults.map`,
+    // `searchResults.length`) continues to work unchanged.
+    const searchResults = searchedProducts;
 
     /* Live totals — mirror what the backend computes per-line so the
        Review Total panel matches the saved order down to the kobo. */
@@ -637,7 +690,11 @@ export default function OrderCreate({ products, categories = [], locations = [],
 
                     {/* Search results panel */}
                     <div className="mb-4 rounded-md border border-slate-200">
-                        {searchResults.length === 0 ? (
+                        {searchLoading && searchResults.length === 0 ? (
+                            <div className="px-3 py-6 text-center text-xs text-slate-400" aria-busy="true">
+                                Searching…
+                            </div>
+                        ) : searchResults.length === 0 ? (
                             <div className="px-3 py-6 text-center text-xs text-slate-400">
                                 {searchQuery || categoryFilter
                                     ? 'No products match the current filter / search.'

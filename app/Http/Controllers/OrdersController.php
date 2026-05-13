@@ -127,9 +127,16 @@ class OrdersController extends Controller
     public function create(Request $request): Response
     {
         $user = $request->user();
+        $canViewProfit = (bool) $user?->hasPermission('orders.view_profit');
 
         return Inertia::render('Orders/Create', [
-            'products' => $this->productsForOrderEntry(),
+            // Performance Phase 1: do NOT ship the full active product
+            // catalogue. The page now calls `orders.products.search`
+            // via debounced AJAX as the operator types. We seed with
+            // the first 25 products (alphabetical) so the panel is not
+            // empty on first paint — same data shape the search
+            // endpoint returns.
+            'products' => $this->productsForOrderEntry(['limit' => 25]),
             'categories' => Category::query()
                 ->where('status', 'Active')
                 ->orderBy('name')
@@ -143,22 +150,30 @@ class OrdersController extends Controller
             'entry_code_preview' => $this->previewEntryCode($user),
             // Phase 5.9: marketer list for the optional "On behalf of"
             // picker — drives the marketer-profit preview.
-            'marketers' => \App\Models\Marketer::query()
-                ->where('status', 'Active')
-                ->with(['user:id,name', 'priceTier:id,code,name'])
-                ->orderBy('code')
-                ->get(['id', 'code', 'user_id', 'marketer_price_tier_id'])
-                ->map(fn ($m) => [
-                    'id' => $m->id,
-                    'code' => $m->code,
-                    'name' => $m->user?->name,
-                    'tier_name' => $m->priceTier?->name,
-                ])
-                ->all(),
+            //
+            // Performance Phase 1: only ship this list to users who can
+            // actually USE the marketer profit preview (`orders.view_profit`).
+            // Non-privileged users (Order Agents, Warehouse Agents,
+            // Viewers, Marketers) never see the preview block (commit
+            // ea3e6e5) so the list is dead weight in their payload.
+            'marketers' => $canViewProfit
+                ? \App\Models\Marketer::query()
+                    ->where('status', 'Active')
+                    ->with(['user:id,name', 'priceTier:id,code,name'])
+                    ->orderBy('code')
+                    ->get(['id', 'code', 'user_id', 'marketer_price_tier_id'])
+                    ->map(fn ($m) => [
+                        'id' => $m->id,
+                        'code' => $m->code,
+                        'name' => $m->user?->name,
+                        'tier_name' => $m->priceTier?->name,
+                    ])
+                    ->all()
+                : [],
             // Cost/profit-visibility gate. The Marketer profit preview
             // block on Create.jsx renders only when this is true; the
             // backing preview endpoint is also gated by the same slug.
-            'can_view_profit' => (bool) $user?->hasPermission('orders.view_profit'),
+            'can_view_profit' => $canViewProfit,
         ]);
     }
 
@@ -194,17 +209,47 @@ class OrdersController extends Controller
      * outstanding reservations). Single grouped query — same SUM-CASE
      * pattern used by InventoryController and DashboardController.
      *
-     * @return \Illuminate\Support\Collection<int, object>
+     * Performance Phase 1 (`docs/performance/PHASE_1_*.md`): now accepts
+     * optional filters so the same query powers both the Create page's
+     * initial empty payload AND the new search endpoint. Returns the
+     * SAME 11-field shape so `Orders/Create.jsx` doesn't change.
+     *
+     * Cost/profit fields (cost_price, marketer_trade_price, etc.) are
+     * NEVER returned by this method — the safe-fields contract from
+     * commit ea3e6e5 stays intact for both call sites.
+     *
+     * @param  array{q?: ?string, category_id?: ?int, limit?: int}  $filters
+     * @return \Illuminate\Support\Collection<int, array<string,mixed>>
      */
-    private function productsForOrderEntry()
+    private function productsForOrderEntry(array $filters = [])
     {
         $stockTypes = "'Purchase','Return To Stock','Opening Balance','Transfer In','Adjustment','Stock Count Correction','Ship','Return Damaged','Transfer Out'";
 
-        return DB::table('products')
+        $q = isset($filters['q']) && $filters['q'] !== null ? trim((string) $filters['q']) : null;
+        $categoryId = isset($filters['category_id']) && $filters['category_id'] !== null
+            ? (int) $filters['category_id']
+            : null;
+        // Limit is bounded server-side so callers can't ask for the whole
+        // catalogue via ?limit=99999. Max 50; default 25.
+        $limit = isset($filters['limit']) ? (int) $filters['limit'] : 25;
+        $limit = max(1, min(50, $limit));
+
+        $query = DB::table('products')
             ->leftJoin('inventory_movements', 'products.id', '=', 'inventory_movements.product_id')
             ->leftJoin('categories', 'products.category_id', '=', 'categories.id')
             ->whereNull('products.deleted_at')
             ->where('products.status', 'Active')
+            ->when($q !== null && $q !== '', function ($w) use ($q) {
+                // Match name / SKU / barcode. Wildcards are escaped via
+                // PDO param binding so user input cannot inject `%`.
+                $w->where(function ($w2) use ($q) {
+                    $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $q) . '%';
+                    $w2->where('products.name', 'like', $like)
+                        ->orWhere('products.sku', 'like', $like)
+                        ->orWhere('products.barcode', 'like', $like);
+                });
+            })
+            ->when($categoryId !== null, fn ($w) => $w->where('products.category_id', $categoryId))
             ->selectRaw("
                 products.id,
                 products.sku,
@@ -227,7 +272,9 @@ class OrdersController extends Controller
                 'products.category_id', 'categories.name',
             ])
             ->orderBy('products.name')
-            ->get()
+            ->limit($limit);
+
+        return $query->get()
             ->map(fn ($p) => [
                 'id' => (int) $p->id,
                 'sku' => $p->sku,
@@ -241,6 +288,37 @@ class OrdersController extends Controller
                 'category_name' => $p->category_name,
                 'available' => max(0, (int) $p->on_hand - (int) $p->reserved),
             ]);
+    }
+
+    /**
+     * Performance Phase 1 — server-side product search for `Orders/Create.jsx`.
+     *
+     * Replaces the previous "ship the entire catalogue in page props"
+     * pattern. Returns at most 25 (configurable up to 50) products
+     * matching the query string, plus optional category filter.
+     *
+     * Field shape is identical to `productsForOrderEntry()` so the
+     * frontend search-results component renders unchanged. Cost/profit
+     * fields are never returned (preserves commit ea3e6e5's gate).
+     */
+    public function searchProducts(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $data = $request->validate([
+            'q' => ['nullable', 'string', 'max:128'],
+            'category_id' => ['nullable', 'integer', 'exists:categories,id'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:50'],
+        ]);
+
+        $results = $this->productsForOrderEntry([
+            'q' => $data['q'] ?? null,
+            'category_id' => isset($data['category_id']) ? (int) $data['category_id'] : null,
+            'limit' => isset($data['limit']) ? (int) $data['limit'] : 25,
+        ]);
+
+        return response()->json([
+            'products' => $results->values(),
+            'limit' => isset($data['limit']) ? max(1, min(50, (int) $data['limit'])) : 25,
+        ]);
     }
 
     public function store(StoreOrderRequest $request): RedirectResponse
