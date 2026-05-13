@@ -15,7 +15,9 @@ use App\Http\Controllers\CustomersController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExpenseCategoriesController;
 use App\Http\Controllers\CashboxesController;
+use App\Http\Controllers\CashboxTransfersController;
 use App\Http\Controllers\ExpensesController;
+use App\Http\Controllers\PaymentMethodsController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\MarketerPortalController;
 use App\Http\Controllers\MarketersController;
@@ -337,6 +339,20 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:cashboxes.deactivate')->post('/cashboxes/{cashbox}/deactivate', [CashboxesController::class, 'deactivate'])->name('cashboxes.deactivate');
     Route::middleware('permission:cashboxes.deactivate')->post('/cashboxes/{cashbox}/reactivate', [CashboxesController::class, 'reactivate'])->name('cashboxes.reactivate');
     Route::middleware('permission:cashbox_transactions.create')->post('/cashboxes/{cashbox}/transactions', [CashboxesController::class, 'storeTransaction'])->name('cashboxes.transactions.store');
+
+    /* ─────────────── Payment methods (Finance Phase 2) ─────────────── */
+    Route::middleware('permission:payment_methods.view')->get('/payment-methods', [PaymentMethodsController::class, 'index'])->name('payment-methods.index');
+    Route::middleware('permission:payment_methods.create')->get('/payment-methods/create', [PaymentMethodsController::class, 'create'])->name('payment-methods.create');
+    Route::middleware('permission:payment_methods.create')->post('/payment-methods', [PaymentMethodsController::class, 'store'])->name('payment-methods.store');
+    Route::middleware('permission:payment_methods.edit')->get('/payment-methods/{paymentMethod}/edit', [PaymentMethodsController::class, 'edit'])->name('payment-methods.edit');
+    Route::middleware('permission:payment_methods.edit')->put('/payment-methods/{paymentMethod}', [PaymentMethodsController::class, 'update'])->name('payment-methods.update');
+    Route::middleware('permission:payment_methods.deactivate')->post('/payment-methods/{paymentMethod}/deactivate', [PaymentMethodsController::class, 'deactivate'])->name('payment-methods.deactivate');
+    Route::middleware('permission:payment_methods.deactivate')->post('/payment-methods/{paymentMethod}/reactivate', [PaymentMethodsController::class, 'reactivate'])->name('payment-methods.reactivate');
+
+    /* ─────────────── Cashbox transfers (Finance Phase 2) ─────────────── */
+    Route::middleware('permission:cashbox_transfers.view')->get('/cashbox-transfers', [CashboxTransfersController::class, 'index'])->name('cashbox-transfers.index');
+    Route::middleware('permission:cashbox_transfers.create')->get('/cashbox-transfers/create', [CashboxTransfersController::class, 'create'])->name('cashbox-transfers.create');
+    Route::middleware('permission:cashbox_transfers.create')->post('/cashbox-transfers', [CashboxTransfersController::class, 'store'])->name('cashbox-transfers.store');
 
     Route::middleware('permission:expenses.view')->get('/expense-categories', [ExpenseCategoriesController::class, 'index'])->name('expense-categories.index');
     Route::middleware('permission:expenses.edit')->post('/expense-categories', [ExpenseCategoriesController::class, 'store'])->name('expense-categories.store');

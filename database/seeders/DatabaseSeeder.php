@@ -27,6 +27,9 @@ class DatabaseSeeder extends Seeder
             WarehousesSeeder::class,
             ShippingCompaniesSeeder::class,
             LocationSeeder::class,
+            // Finance Phase 2 — canonical payment methods. Independent of
+            // cashboxes; default_cashbox_id is filled later by admins.
+            PaymentMethodsSeeder::class,
             AdminUserSeeder::class,
         ]);
     }

@@ -83,6 +83,8 @@ class RolesSeeder extends Seeder
             'tickets.view', 'tickets.create', 'tickets.edit', 'tickets.delete', 'tickets.manage',
             // Finance Phase 1 — managers see cashboxes and statements but don't mutate.
             'cashboxes.view', 'cashbox_transactions.view',
+            // Finance Phase 2 — managers see payment methods and transfers (read-only).
+            'payment_methods.view', 'cashbox_transfers.view',
         ];
 
         $orderAgent = [
@@ -129,6 +131,10 @@ class RolesSeeder extends Seeder
             // Deactivation reserved for admins per docs/finance Phase 0 matrix.
             'cashboxes.view', 'cashboxes.create', 'cashboxes.edit',
             'cashbox_transactions.view', 'cashbox_transactions.create',
+            // Finance Phase 2 — accountant manages payment methods + transfers.
+            // Deactivation of payment methods reserved for admin (per Phase 0 matrix).
+            'payment_methods.view', 'payment_methods.create', 'payment_methods.edit',
+            'cashbox_transfers.view', 'cashbox_transfers.create',
         ];
 
         $marketer = [

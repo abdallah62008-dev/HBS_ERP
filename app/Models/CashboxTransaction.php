@@ -36,11 +36,19 @@ class CashboxTransaction extends Model
 
     public const SOURCE_OPENING_BALANCE = 'opening_balance';
     public const SOURCE_ADJUSTMENT = 'adjustment';
+    public const SOURCE_TRANSFER = 'transfer';
 
     /** Phase 1 source_type whitelist. Later phases extend this list. */
     public const PHASE_1_SOURCE_TYPES = [
         self::SOURCE_OPENING_BALANCE,
         self::SOURCE_ADJUSTMENT,
+    ];
+
+    /** Phase 2 adds the `transfer` source_type. */
+    public const PHASE_2_SOURCE_TYPES = [
+        self::SOURCE_OPENING_BALANCE,
+        self::SOURCE_ADJUSTMENT,
+        self::SOURCE_TRANSFER,
     ];
 
     protected $fillable = [

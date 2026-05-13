@@ -123,6 +123,8 @@ export const sidebarSections = [
         icon: I.cash,
         items: [
             { label: 'Cashboxes', href: '/cashboxes', icon: I.cash, permission: 'cashboxes.view' },
+            { label: 'Cashbox Transfers', href: '/cashbox-transfers', icon: I.cash, permission: 'cashbox_transfers.view' },
+            { label: 'Payment Methods', href: '/payment-methods', icon: I.cash, permission: 'payment_methods.view' },
             { label: 'Expenses', href: '/expenses', icon: I.cash, permission: 'expenses.view' },
             { label: 'Collections', href: '/collections', icon: I.cash, permission: 'collections.view' },
         ],

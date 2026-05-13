@@ -115,6 +115,17 @@ class PermissionsSeeder extends Seeder
                 'cashbox_transactions.view' => 'View cashbox statement',
                 'cashbox_transactions.create' => 'Record manual cashbox adjustment',
             ],
+            // Finance Phase 2 — payment methods + cashbox transfers.
+            'payment_methods' => [
+                'payment_methods.view' => 'View payment methods',
+                'payment_methods.create' => 'Create payment method',
+                'payment_methods.edit' => 'Edit payment method',
+                'payment_methods.deactivate' => 'Deactivate / reactivate payment method',
+            ],
+            'cashbox_transfers' => [
+                'cashbox_transfers.view' => 'View cashbox transfers',
+                'cashbox_transfers.create' => 'Record cashbox transfer',
+            ],
             'ads' => [
                 'ads.view' => 'View ads campaigns',
                 'ads.create' => 'Create ads campaign',
