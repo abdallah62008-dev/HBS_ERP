@@ -101,6 +101,9 @@ class RolesSeeder extends Seeder
             'shipping.view', 'shipping.assign', 'shipping.print_label',
             'shipping.update_status', 'shipping.reconcile',
             'collections.view', 'collections.update', 'collections.reconcile',
+            // Finance Phase 3 — shipping agents reconcile courier COD
+            // settlements; that's the canonical use of these slugs.
+            'collections.assign_cashbox', 'collections.reconcile_settlement',
         ];
 
         $warehouseAgent = [
@@ -135,6 +138,8 @@ class RolesSeeder extends Seeder
             // Deactivation of payment methods reserved for admin (per Phase 0 matrix).
             'payment_methods.view', 'payment_methods.create', 'payment_methods.edit',
             'cashbox_transfers.view', 'cashbox_transfers.create',
+            // Finance Phase 3 — accountant posts collections to cashboxes.
+            'collections.assign_cashbox', 'collections.reconcile_settlement',
         ];
 
         $marketer = [

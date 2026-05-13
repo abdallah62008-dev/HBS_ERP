@@ -288,6 +288,12 @@ Route::middleware(['auth', 'active'])->group(function () {
         ->name('collections.index');
     Route::middleware('permission:collections.update')->put('/collections/{collection}', [CollectionsController::class, 'update'])
         ->name('collections.update');
+    // Finance Phase 3 — post a collection's collected amount to a cashbox.
+    // Separate permission so "edit collection fields" and "move money into
+    // a cashbox" remain distinct authorities (Phase 0 design).
+    Route::middleware('permission:collections.reconcile_settlement')
+        ->post('/collections/{collection}/post-to-cashbox', [CollectionsController::class, 'postToCashbox'])
+        ->name('collections.post-to-cashbox');
 
     /* ─────────────── Returns (Phase 4) ─────────────── */
     Route::middleware('permission:returns.view')->get('/returns', [ReturnsController::class, 'index'])

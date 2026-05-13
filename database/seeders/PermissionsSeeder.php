@@ -91,6 +91,13 @@ class PermissionsSeeder extends Seeder
                 'collections.view' => 'View collections',
                 'collections.update' => 'Update collection',
                 'collections.reconcile' => 'Reconcile collections',
+                // Finance Phase 3 — finer-grained gates that complement the
+                // existing slugs above. `assign_cashbox` covers picking the
+                // cashbox / payment method on the collection row (no posting).
+                // `reconcile_settlement` covers the action that actually
+                // writes a cashbox_transaction.
+                'collections.assign_cashbox' => 'Assign cashbox / payment method to a collection',
+                'collections.reconcile_settlement' => 'Post a collection to a cashbox (settlement)',
             ],
             'returns' => [
                 'returns.view' => 'View returns',
