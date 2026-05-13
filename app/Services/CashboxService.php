@@ -29,6 +29,22 @@ class CashboxService
 {
     public const MODULE = 'finance.cashbox';
 
+    public function __construct(
+        private readonly ?FinancePeriodService $financePeriods = null,
+    ) {}
+
+    /**
+     * Phase 5F — guard the supplied posting date against closed finance
+     * periods. The service is injected via the container so legacy
+     * callers (tests pre-Phase-5F) that instantiate this class directly
+     * still work; if the dependency isn't resolved we skip the check.
+     */
+    private function assertDateIsOpen(\Carbon\Carbon|string $date): void
+    {
+        $svc = $this->financePeriods ?? app(FinancePeriodService::class);
+        $svc->assertDateIsOpen($date);
+    }
+
     /* ────────────────────── Cashbox lifecycle ────────────────────── */
 
     /**
@@ -137,6 +153,10 @@ class CashboxService
             throw new RuntimeException('Cashbox already has transactions — opening balance cannot be written again.');
         }
 
+        // Phase 5F — opening balance always uses now(); block if today
+        // falls inside a closed finance period.
+        $this->assertDateIsOpen(now());
+
         $signed = $this->normalizeTransactionAmount(
             direction: $amount >= 0 ? CashboxTransaction::DIRECTION_IN : CashboxTransaction::DIRECTION_OUT,
             amount: $amount,
@@ -177,14 +197,19 @@ class CashboxService
             amount: (float) $data['amount'],
         );
 
-        return DB::transaction(function () use ($cashbox, $signed, $notes, $data) {
+        $occurredAt = isset($data['occurred_at']) && $data['occurred_at']
+            ? \Carbon\Carbon::parse($data['occurred_at'])
+            : now();
+
+        // Phase 5F — block adjustment if its date falls in a closed period.
+        $this->assertDateIsOpen($occurredAt);
+
+        return DB::transaction(function () use ($cashbox, $signed, $notes, $occurredAt) {
             $tx = CashboxTransaction::create([
                 'cashbox_id' => $cashbox->id,
                 'direction' => $signed['direction'],
                 'amount' => $signed['amount'],
-                'occurred_at' => isset($data['occurred_at']) && $data['occurred_at']
-                    ? \Carbon\Carbon::parse($data['occurred_at'])
-                    : now(),
+                'occurred_at' => $occurredAt,
                 'source_type' => CashboxTransaction::SOURCE_ADJUSTMENT,
                 'source_id' => null,
                 'notes' => $notes,

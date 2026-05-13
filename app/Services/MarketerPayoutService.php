@@ -256,6 +256,9 @@ class MarketerPayoutService
 
             $occurredAt = $defaultOccurredAt ?? now();
 
+            // Phase 5F — block payout payment if occurred_at is in a closed period.
+            app(FinancePeriodService::class)->assertDateIsOpen($occurredAt);
+
             // 4. Write the cashbox OUT row (the canonical money movement).
             $tx = CashboxTransaction::create([
                 'cashbox_id' => $lockedCashbox->id,

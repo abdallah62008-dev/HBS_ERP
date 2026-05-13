@@ -61,6 +61,9 @@ class CashboxTransferService
         $this->assertSameCurrency($from, $to);
         $this->assertPositiveAmount($amount);
 
+        // Phase 5F — block transfers whose occurred_at is in a closed period.
+        app(FinancePeriodService::class)->assertDateIsOpen($occurredAt);
+
         return DB::transaction(function () use ($from, $to, $amount, $occurredAt, $reason) {
             // Lock both cashbox rows in id-ascending order so concurrent
             // transfers between the same pair (A→B and B→A) acquire locks

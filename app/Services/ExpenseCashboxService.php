@@ -86,6 +86,8 @@ class ExpenseCashboxService
             $this->preventDoublePosting($lockedExpense);
             $this->validateExpenseCanBePosted($lockedExpense);
             $this->validateSufficientBalanceIfNeeded($lockedCashbox, (float) $lockedExpense->amount);
+            // Phase 5F — block expense posting whose occurred_at is in a closed period.
+            app(FinancePeriodService::class)->assertDateIsOpen($occurredAt);
 
             $tx = $this->createCashboxTransaction($lockedExpense, $lockedCashbox, $paymentMethod, $occurredAt);
             return $this->updateExpenseCashboxFields($lockedExpense, $lockedCashbox, $paymentMethod, $tx);

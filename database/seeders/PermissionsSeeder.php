@@ -197,6 +197,17 @@ class PermissionsSeeder extends Seeder
             'finance_reports' => [
                 'finance_reports.view' => 'View finance reports',
             ],
+            // Finance Phase 5F — finance period controls. Reopen is the
+            // strictest grant (admins only) because it lets historical
+            // movement be re-edited. Close is granted to manager +
+            // accountant per Phase 0 separation-of-duties matrix.
+            'finance_periods' => [
+                'finance_periods.view' => 'View finance periods',
+                'finance_periods.create' => 'Create finance period',
+                'finance_periods.update' => 'Edit finance period',
+                'finance_periods.close' => 'Close finance period',
+                'finance_periods.reopen' => 'Reopen closed finance period',
+            ],
             'system' => [
                 'settings.manage' => 'Manage settings',
                 'users.manage' => 'Manage users',

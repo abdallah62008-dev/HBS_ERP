@@ -92,6 +92,9 @@ class RolesSeeder extends Seeder
             'marketer_payouts.view', 'marketer_payouts.approve', 'marketer_payouts.reject',
             // Finance Phase 5E — managers see finance reports for oversight.
             'finance_reports.view',
+            // Finance Phase 5F — managers can view + close periods.
+            // Reopen is reserved for admin (re-edits historical books).
+            'finance_periods.view', 'finance_periods.close',
         ];
 
         $orderAgent = [
@@ -171,6 +174,10 @@ class RolesSeeder extends Seeder
             // Finance Phase 5E — accountant is the primary consumer of
             // the cashbox-domain reports.
             'finance_reports.view',
+            // Finance Phase 5F — accountant creates + closes monthly
+            // periods. Reopen stays with admin (Phase 0 matrix).
+            'finance_periods.view', 'finance_periods.create',
+            'finance_periods.update', 'finance_periods.close',
         ];
 
         $marketer = [

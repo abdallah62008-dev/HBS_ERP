@@ -81,6 +81,8 @@ class CollectionCashboxService
             // Critical guards re-run on the locked row.
             $this->preventDoublePosting($locked);
             $this->validateCollectionCanBePosted($locked);
+            // Phase 5F — block posting whose occurred_at is in a closed period.
+            app(FinancePeriodService::class)->assertDateIsOpen($occurredAt);
 
             $tx = $this->createCashboxTransaction($locked, $cashbox, $paymentMethod, $occurredAt);
             return $this->updateCollectionCashboxFields($locked, $cashbox, $paymentMethod, $tx);

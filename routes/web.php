@@ -19,6 +19,7 @@ use App\Http\Controllers\CashboxTransfersController;
 use App\Http\Controllers\ExpensesController;
 use App\Http\Controllers\PaymentMethodsController;
 use App\Http\Controllers\RefundsController;
+use App\Http\Controllers\FinancePeriodsController;
 use App\Http\Controllers\FinanceReportsController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\MarketerPayoutsController;
@@ -457,6 +458,15 @@ Route::middleware(['auth', 'active'])->group(function () {
         Route::middleware('permission:reports.ads')->get('/ads', [ReportsController::class, 'ads'])->name('ads');
         Route::middleware('permission:reports.cash_flow')->get('/cash-flow', [ReportsController::class, 'cashFlow'])->name('cash-flow');
     });
+
+    /* ─────────────── Finance Periods (Phase 5F) ─────────────── */
+    Route::middleware('permission:finance_periods.view')->get('/finance/periods', [FinancePeriodsController::class, 'index'])->name('finance-periods.index');
+    Route::middleware('permission:finance_periods.create')->get('/finance/periods/create', [FinancePeriodsController::class, 'create'])->name('finance-periods.create');
+    Route::middleware('permission:finance_periods.create')->post('/finance/periods', [FinancePeriodsController::class, 'store'])->name('finance-periods.store');
+    Route::middleware('permission:finance_periods.update')->get('/finance/periods/{period}/edit', [FinancePeriodsController::class, 'edit'])->name('finance-periods.edit');
+    Route::middleware('permission:finance_periods.update')->put('/finance/periods/{period}', [FinancePeriodsController::class, 'update'])->name('finance-periods.update');
+    Route::middleware('permission:finance_periods.close')->post('/finance/periods/{period}/close', [FinancePeriodsController::class, 'close'])->name('finance-periods.close');
+    Route::middleware('permission:finance_periods.reopen')->post('/finance/periods/{period}/reopen', [FinancePeriodsController::class, 'reopen'])->name('finance-periods.reopen');
 
     /* ─────────────── Finance Reports (Phase 5E) ─────────────── */
     Route::middleware('permission:finance_reports.view')->prefix('finance/reports')->name('finance-reports.')->group(function () {

@@ -230,6 +230,9 @@ class RefundService
 
             $occurredAt = $defaultOccurredAt ?? now();
 
+            // Phase 5F — block refund payment if occurred_at is in a closed period.
+            app(FinancePeriodService::class)->assertDateIsOpen($occurredAt);
+
             $tx = CashboxTransaction::create([
                 'cashbox_id' => $lockedCashbox->id,
                 'direction' => CashboxTransaction::DIRECTION_OUT,
