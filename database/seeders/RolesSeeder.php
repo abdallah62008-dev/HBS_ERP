@@ -90,6 +90,8 @@ class RolesSeeder extends Seeder
             // Finance Phase 5D — managers approve/reject marketer payouts but
             // do not execute the cashbox payment (separation of duties).
             'marketer_payouts.view', 'marketer_payouts.approve', 'marketer_payouts.reject',
+            // Finance Phase 5E — managers see finance reports for oversight.
+            'finance_reports.view',
         ];
 
         $orderAgent = [
@@ -166,6 +168,9 @@ class RolesSeeder extends Seeder
             // (Phase 0 separation of duties matrix).
             'marketer_payouts.view', 'marketer_payouts.create',
             'marketer_payouts.reject', 'marketer_payouts.pay',
+            // Finance Phase 5E — accountant is the primary consumer of
+            // the cashbox-domain reports.
+            'finance_reports.view',
         ];
 
         $marketer = [

@@ -19,6 +19,7 @@ use App\Http\Controllers\CashboxTransfersController;
 use App\Http\Controllers\ExpensesController;
 use App\Http\Controllers\PaymentMethodsController;
 use App\Http\Controllers\RefundsController;
+use App\Http\Controllers\FinanceReportsController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\MarketerPayoutsController;
 use App\Http\Controllers\MarketerPortalController;
@@ -455,6 +456,19 @@ Route::middleware(['auth', 'active'])->group(function () {
         Route::middleware('permission:reports.staff')->get('/staff', [ReportsController::class, 'staff'])->name('staff');
         Route::middleware('permission:reports.ads')->get('/ads', [ReportsController::class, 'ads'])->name('ads');
         Route::middleware('permission:reports.cash_flow')->get('/cash-flow', [ReportsController::class, 'cashFlow'])->name('cash-flow');
+    });
+
+    /* ─────────────── Finance Reports (Phase 5E) ─────────────── */
+    Route::middleware('permission:finance_reports.view')->prefix('finance/reports')->name('finance-reports.')->group(function () {
+        Route::get('/', [FinanceReportsController::class, 'index'])->name('index');
+        Route::get('/cashboxes', [FinanceReportsController::class, 'cashboxes'])->name('cashboxes');
+        Route::get('/movements', [FinanceReportsController::class, 'movements'])->name('movements');
+        Route::get('/collections', [FinanceReportsController::class, 'collections'])->name('collections');
+        Route::get('/expenses', [FinanceReportsController::class, 'expenses'])->name('expenses');
+        Route::get('/refunds', [FinanceReportsController::class, 'refunds'])->name('refunds');
+        Route::get('/marketer-payouts', [FinanceReportsController::class, 'marketerPayouts'])->name('marketer-payouts');
+        Route::get('/transfers', [FinanceReportsController::class, 'transfers'])->name('transfers');
+        Route::get('/cash-flow', [FinanceReportsController::class, 'cashFlow'])->name('cash-flow');
     });
 
     /* ─────────────── Notifications (Phase 6) ─────────────── */

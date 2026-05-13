@@ -116,7 +116,12 @@ class CashboxesController extends Controller
                 'created_by' => $tx->createdBy?->only(['id', 'name']),
             ]),
             'filters' => $filters,
-            'phase1_source_types' => \App\Models\CashboxTransaction::PHASE_1_SOURCE_TYPES,
+            // Phase 5E — surface every modern source type in the
+            // statement filter dropdown (Phase 1 limited it to
+            // opening_balance + adjustment; Phases 2-5D added the
+            // rest). The prop name is retained for backwards
+            // compatibility with the Statement.jsx page.
+            'phase1_source_types' => \App\Models\CashboxTransaction::PHASE_5D_SOURCE_TYPES,
         ]);
     }
 

@@ -190,6 +190,13 @@ class PermissionsSeeder extends Seeder
                 'reports.ads' => 'View ads report',
                 'reports.staff' => 'View staff report',
             ],
+            // Finance Phase 5E — cashbox-domain finance reports (separate
+            // from the operational `reports.*` slugs above). Read-only;
+            // no export slug yet — add it in a later phase if/when a
+            // safe export pattern is introduced.
+            'finance_reports' => [
+                'finance_reports.view' => 'View finance reports',
+            ],
             'system' => [
                 'settings.manage' => 'Manage settings',
                 'users.manage' => 'Manage users',
