@@ -105,6 +105,14 @@ class PermissionsSeeder extends Seeder
                 'returns.approve' => 'Approve return',
                 'returns.inspect' => 'Inspect returned product',
             ],
+            // Finance Phase 5A — Refunds foundation. The `refunds.pay`
+            // slug is reserved for Phase 5B and is NOT seeded here.
+            'refunds' => [
+                'refunds.view' => 'View refunds',
+                'refunds.create' => 'Create / edit / delete requested refund',
+                'refunds.approve' => 'Approve requested refund',
+                'refunds.reject' => 'Reject requested refund',
+            ],
             'expenses' => [
                 'expenses.view' => 'View expenses',
                 'expenses.create' => 'Create expense',

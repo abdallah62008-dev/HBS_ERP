@@ -85,6 +85,8 @@ class RolesSeeder extends Seeder
             'cashboxes.view', 'cashbox_transactions.view',
             // Finance Phase 2 — managers see payment methods and transfers (read-only).
             'payment_methods.view', 'cashbox_transfers.view',
+            // Finance Phase 5A — managers own the approve/reject path on refunds.
+            'refunds.view', 'refunds.create', 'refunds.approve', 'refunds.reject',
         ];
 
         $orderAgent = [
@@ -94,6 +96,9 @@ class RolesSeeder extends Seeder
             'products.view',
             // Order agents handle customer-issue tickets at intake (Phase 7).
             'tickets.view', 'tickets.create',
+            // Finance Phase 5A — order agents can request refunds at intake;
+            // approve / reject stay with manager + admin.
+            'refunds.view', 'refunds.create',
         ];
 
         $shippingAgent = [
@@ -114,6 +119,8 @@ class RolesSeeder extends Seeder
             'purchases.view',
             'shipping.view', 'shipping.print_label',
             'returns.view', 'returns.inspect',
+            // Finance Phase 5A — read-only access for return context.
+            'refunds.view',
         ];
 
         $accountant = [
@@ -142,6 +149,11 @@ class RolesSeeder extends Seeder
             'collections.assign_cashbox', 'collections.reconcile_settlement',
             // Finance Phase 4 — accountant pays expenses from cashboxes.
             'expenses.assign_cashbox', 'expenses.post_to_cashbox',
+            // Finance Phase 5A — accountant can view, create, and reject
+            // refunds. `approve` is intentionally NOT granted (manager
+            // approves; accountant executes — per Phase 0 separation of
+            // duties). `pay` will land in Phase 5B as its own grant.
+            'refunds.view', 'refunds.create', 'refunds.reject',
         ];
 
         $marketer = [
@@ -163,6 +175,8 @@ class RolesSeeder extends Seeder
             'reports.view', 'reports.sales', 'reports.profit',
             'reports.inventory', 'reports.shipping',
             'tickets.view',
+            // Finance Phase 5A — viewer can see refunds.
+            'refunds.view',
         ];
 
         // Filter out any permission slugs that don't exist yet (forward-

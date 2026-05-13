@@ -127,6 +127,7 @@ export const sidebarSections = [
             { label: 'Payment Methods', href: '/payment-methods', icon: I.cash, permission: 'payment_methods.view' },
             { label: 'Expenses', href: '/expenses', icon: I.cash, permission: 'expenses.view' },
             { label: 'Collections', href: '/collections', icon: I.cash, permission: 'collections.view' },
+            { label: 'Refunds', href: '/refunds', icon: I.revert, permission: 'refunds.view' },
         ],
     },
     {

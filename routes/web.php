@@ -18,6 +18,7 @@ use App\Http\Controllers\CashboxesController;
 use App\Http\Controllers\CashboxTransfersController;
 use App\Http\Controllers\ExpensesController;
 use App\Http\Controllers\PaymentMethodsController;
+use App\Http\Controllers\RefundsController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\MarketerPortalController;
 use App\Http\Controllers\MarketersController;
@@ -364,6 +365,20 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:cashbox_transfers.view')->get('/cashbox-transfers', [CashboxTransfersController::class, 'index'])->name('cashbox-transfers.index');
     Route::middleware('permission:cashbox_transfers.create')->get('/cashbox-transfers/create', [CashboxTransfersController::class, 'create'])->name('cashbox-transfers.create');
     Route::middleware('permission:cashbox_transfers.create')->post('/cashbox-transfers', [CashboxTransfersController::class, 'store'])->name('cashbox-transfers.store');
+
+    /* ─────────────── Refunds (Finance Phase 5A — Foundation) ───────────────
+     *
+     * Lifecycle: requested → approved | rejected. No `pay` action yet —
+     * the cashbox OUT transaction is Phase 5B's job.
+     */
+    Route::middleware('permission:refunds.view')->get('/refunds', [RefundsController::class, 'index'])->name('refunds.index');
+    Route::middleware('permission:refunds.create')->get('/refunds/create', [RefundsController::class, 'create'])->name('refunds.create');
+    Route::middleware('permission:refunds.create')->post('/refunds', [RefundsController::class, 'store'])->name('refunds.store');
+    Route::middleware('permission:refunds.create')->get('/refunds/{refund}/edit', [RefundsController::class, 'edit'])->name('refunds.edit');
+    Route::middleware('permission:refunds.create')->put('/refunds/{refund}', [RefundsController::class, 'update'])->name('refunds.update');
+    Route::middleware('permission:refunds.create')->delete('/refunds/{refund}', [RefundsController::class, 'destroy'])->name('refunds.destroy');
+    Route::middleware('permission:refunds.approve')->post('/refunds/{refund}/approve', [RefundsController::class, 'approve'])->name('refunds.approve');
+    Route::middleware('permission:refunds.reject')->post('/refunds/{refund}/reject', [RefundsController::class, 'reject'])->name('refunds.reject');
 
     Route::middleware('permission:expenses.view')->get('/expense-categories', [ExpenseCategoriesController::class, 'index'])->name('expense-categories.index');
     Route::middleware('permission:expenses.edit')->post('/expense-categories', [ExpenseCategoriesController::class, 'store'])->name('expense-categories.store');
