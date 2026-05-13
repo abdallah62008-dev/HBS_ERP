@@ -38,6 +38,7 @@ class CashboxTransaction extends Model
     public const SOURCE_ADJUSTMENT = 'adjustment';
     public const SOURCE_TRANSFER = 'transfer';
     public const SOURCE_COLLECTION = 'collection';
+    public const SOURCE_EXPENSE = 'expense';
 
     /** Phase 1 source_type whitelist. Later phases extend this list. */
     public const PHASE_1_SOURCE_TYPES = [
@@ -58,6 +59,15 @@ class CashboxTransaction extends Model
         self::SOURCE_ADJUSTMENT,
         self::SOURCE_TRANSFER,
         self::SOURCE_COLLECTION,
+    ];
+
+    /** Phase 4 adds the `expense` source_type. */
+    public const PHASE_4_SOURCE_TYPES = [
+        self::SOURCE_OPENING_BALANCE,
+        self::SOURCE_ADJUSTMENT,
+        self::SOURCE_TRANSFER,
+        self::SOURCE_COLLECTION,
+        self::SOURCE_EXPENSE,
     ];
 
     protected $fillable = [

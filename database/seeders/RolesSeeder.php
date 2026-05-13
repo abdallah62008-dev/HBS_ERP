@@ -140,6 +140,8 @@ class RolesSeeder extends Seeder
             'cashbox_transfers.view', 'cashbox_transfers.create',
             // Finance Phase 3 — accountant posts collections to cashboxes.
             'collections.assign_cashbox', 'collections.reconcile_settlement',
+            // Finance Phase 4 — accountant pays expenses from cashboxes.
+            'expenses.assign_cashbox', 'expenses.post_to_cashbox',
         ];
 
         $marketer = [

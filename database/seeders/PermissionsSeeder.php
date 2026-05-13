@@ -111,6 +111,10 @@ class PermissionsSeeder extends Seeder
                 'expenses.edit' => 'Edit expense',
                 'expenses.delete' => 'Delete expense',
                 'expenses.export' => 'Export expenses',
+                // Finance Phase 4 — split the finance side of expenses
+                // from the basic CRUD slugs above.
+                'expenses.assign_cashbox' => 'Assign cashbox / payment method to an expense',
+                'expenses.post_to_cashbox' => 'Post an expense to a cashbox (retroactive)',
             ],
             // Finance Phase 1 — cashboxes foundation. Later phases extend
             // this module with: payment_methods, cashbox_transfers, refunds.

@@ -334,6 +334,11 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:expenses.edit')->get('/expenses/{expense}/edit', [ExpensesController::class, 'edit'])->name('expenses.edit');
     Route::middleware(['permission:expenses.edit', 'fiscal_year_lock'])->put('/expenses/{expense}', [ExpensesController::class, 'update'])->name('expenses.update');
     Route::middleware(['permission:expenses.delete', 'fiscal_year_lock'])->delete('/expenses/{expense}', [ExpensesController::class, 'destroy'])->name('expenses.destroy');
+    // Finance Phase 4 — retroactively post a historical / null-cashbox
+    // expense to a cashbox. Separate permission from `expenses.edit`.
+    Route::middleware('permission:expenses.post_to_cashbox')
+        ->post('/expenses/{expense}/post-to-cashbox', [ExpensesController::class, 'postToCashbox'])
+        ->name('expenses.post-to-cashbox');
 
     /* ─────────────── Cashboxes (Finance Phase 1) ─────────────── */
     Route::middleware('permission:cashboxes.view')->get('/cashboxes', [CashboxesController::class, 'index'])->name('cashboxes.index');
