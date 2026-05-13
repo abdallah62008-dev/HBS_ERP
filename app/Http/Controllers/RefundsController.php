@@ -106,11 +106,18 @@ class RefundsController extends Controller
         $data = $request->validated();
 
         // Over-refund guard up-front so the operator gets a clear error
-        // before the row is inserted.
+        // before the row is inserted. Both the collection-level guard
+        // (Phase 5A) and the return-level guard (Phase 5C) run when
+        // their respective linkage IDs are present.
         try {
             $this->service->assertRefundableAmount(
                 excludeRefundId: null,
                 collectionId: isset($data['collection_id']) ? (int) $data['collection_id'] : null,
+                proposedAmount: (float) $data['amount'],
+            );
+            $this->service->assertReturnRefundableAmount(
+                excludeRefundId: null,
+                orderReturnId: isset($data['order_return_id']) ? (int) $data['order_return_id'] : null,
                 proposedAmount: (float) $data['amount'],
             );
         } catch (InvalidArgumentException $e) {
@@ -156,12 +163,17 @@ class RefundsController extends Controller
 
         $data = $request->validated();
 
-        // Re-run the over-refund guard for the new amount, excluding
+        // Re-run the over-refund guards for the new amount, excluding
         // this refund from the existing-sum so we don't double-count.
         try {
             $this->service->assertRefundableAmount(
                 excludeRefundId: $refund->id,
                 collectionId: isset($data['collection_id']) ? (int) $data['collection_id'] : null,
+                proposedAmount: (float) $data['amount'],
+            );
+            $this->service->assertReturnRefundableAmount(
+                excludeRefundId: $refund->id,
+                orderReturnId: isset($data['order_return_id']) ? (int) $data['order_return_id'] : null,
                 proposedAmount: (float) $data['amount'],
             );
         } catch (InvalidArgumentException $e) {

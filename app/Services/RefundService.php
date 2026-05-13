@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Cashbox;
 use App\Models\CashboxTransaction;
 use App\Models\Collection;
+use App\Models\OrderReturn;
 use App\Models\PaymentMethod;
 use App\Models\Refund;
 use App\Models\User;
@@ -273,6 +274,167 @@ class RefundService
 
             return $locked->fresh(['cashbox', 'paymentMethod', 'cashboxTransaction', 'paidBy']);
         });
+    }
+
+    /**
+     * Phase 5C — Create a `requested` refund from an inspected return.
+     *
+     * Atomic: locks the return row, re-checks eligibility, runs the
+     * over-return + over-collection guards on the locked state, then
+     * writes the refund row with `order_return_id` already linked.
+     * Status is always `requested` — approval and payment continue
+     * to flow through `approve()` / `pay()` (separation of duties).
+     *
+     * The `amount` defaults to `orderReturn.refund_amount` if not
+     * supplied (matches the inspector's recorded refund amount). The
+     * caller may pass a smaller amount to issue a partial refund;
+     * passing more is blocked by the over-return guard.
+     *
+     * @param  array{amount?:numeric, reason?:?string}  $data
+     */
+    public function createFromReturn(OrderReturn $orderReturn, ?User $user, array $data = []): Refund
+    {
+        // Cheap eligibility check outside the lock so the caller sees
+        // a clean error before any rows are touched.
+        if (! $orderReturn->canRequestRefund()) {
+            throw new RuntimeException(
+                "Return #{$orderReturn->id} (status: {$orderReturn->return_status}, "
+                . "refund_amount: {$orderReturn->refund_amount}) is not eligible to request a refund."
+            );
+        }
+
+        $actor = $user ?? Auth::user();
+
+        return DB::transaction(function () use ($orderReturn, $actor, $data) {
+            // Lock the return row so two concurrent "Request refund"
+            // clicks can't both pass the over-return guard at the
+            // boundary.
+            $locked = OrderReturn::query()->lockForUpdate()->findOrFail($orderReturn->id);
+
+            // Re-run eligibility on the locked row (status could have
+            // moved while we waited for the lock).
+            if (! $locked->canRequestRefund()) {
+                throw new RuntimeException(
+                    "Return #{$locked->id} (status: {$locked->return_status}) is no longer eligible."
+                );
+            }
+
+            $amount = isset($data['amount']) && $data['amount'] !== null && $data['amount'] !== ''
+                ? round((float) $data['amount'], 2)
+                : (float) $locked->refund_amount;
+
+            if ($amount <= 0) {
+                throw new InvalidArgumentException('Refund amount must be greater than zero.');
+            }
+
+            // Over-return guard: cumulative active refunds for this
+            // return must not exceed return.refund_amount.
+            $this->assertReturnRefundableAmount(
+                excludeRefundId: null,
+                orderReturnId: $locked->id,
+                proposedAmount: $amount,
+            );
+
+            // Preserve the Phase 5A collection-level guard as well.
+            // The return belongs to an order; the order may also have
+            // a collection. Surface the most useful linkage we can.
+            $collectionId = optional($locked->order)->id
+                ? Collection::where('order_id', $locked->order->id)->value('id')
+                : null;
+
+            if ($collectionId) {
+                $this->assertRefundableAmount(
+                    excludeRefundId: null,
+                    collectionId: $collectionId,
+                    proposedAmount: $amount,
+                );
+            }
+
+            $reason = $data['reason'] ?? "Refund from return #{$locked->id}";
+
+            $refund = Refund::create([
+                'order_id' => $locked->order_id,
+                'collection_id' => $collectionId,
+                'order_return_id' => $locked->id,
+                'customer_id' => $locked->customer_id,
+                'amount' => $amount,
+                'reason' => $reason,
+                'status' => Refund::STATUS_REQUESTED,
+                'requested_by' => $actor?->id,
+            ]);
+
+            AuditLogService::log(
+                action: 'refund_requested_from_return',
+                module: self::MODULE,
+                recordType: Refund::class,
+                recordId: $refund->id,
+                oldValues: null,
+                newValues: [
+                    'status' => Refund::STATUS_REQUESTED,
+                    'order_return_id' => $locked->id,
+                    'order_id' => $locked->order_id,
+                    'collection_id' => $collectionId,
+                    'customer_id' => $locked->customer_id,
+                    'amount' => (string) $refund->amount,
+                    'requested_by' => $actor?->id,
+                ],
+            );
+
+            return $refund->fresh(['order', 'orderReturn', 'collection', 'customer', 'requestedBy']);
+        });
+    }
+
+    /**
+     * Phase 5C — Over-return refund guard.
+     *
+     * Throws when cumulative active refunds (`requested + approved +
+     * paid`) for a given return would exceed the return's
+     * `refund_amount`. Rejected refunds are excluded.
+     *
+     * Mirrors `assertRefundableAmount` (collection-level guard).
+     */
+    public function assertReturnRefundableAmount(?int $excludeRefundId, ?int $orderReturnId, float $proposedAmount): void
+    {
+        if ($proposedAmount <= 0) {
+            throw new InvalidArgumentException('Refund amount must be greater than zero.');
+        }
+
+        if (! $orderReturnId) {
+            // Not linked to a return — nothing to enforce here.
+            return;
+        }
+
+        $orderReturn = OrderReturn::find($orderReturnId);
+        if (! $orderReturn) {
+            throw new InvalidArgumentException("Return #{$orderReturnId} not found.");
+        }
+
+        $base = (float) $orderReturn->refund_amount;
+        if ($base <= 0) {
+            throw new InvalidArgumentException(
+                "Return #{$orderReturnId} has refund_amount=0; no refund can be issued against it."
+            );
+        }
+
+        $query = Refund::query()
+            ->where('order_return_id', $orderReturnId)
+            ->whereIn('status', Refund::ACTIVE_STATUSES);
+
+        if ($excludeRefundId) {
+            $query->where('id', '!=', $excludeRefundId);
+        }
+
+        $existingActive = (float) $query->sum('amount');
+        $total = round($existingActive + $proposedAmount, 2);
+
+        if ($total > $base) {
+            throw new InvalidArgumentException(
+                "Cumulative active refunds for return #{$orderReturnId} ({$total}) "
+                . "would exceed the return's refund_amount ({$base}). "
+                . "Existing active refunds total {$existingActive}; the requested amount of "
+                . "{$proposedAmount} pushes it over."
+            );
+        }
     }
 
     /**

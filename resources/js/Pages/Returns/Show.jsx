@@ -4,7 +4,29 @@ import StatusBadge from '@/Components/StatusBadge';
 import useCan from '@/Hooks/useCan';
 import { Head, Link, router, useForm } from '@inertiajs/react';
 
-export default function ReturnShow({ return: ret, reasons }) {
+function fmtAmount(value, currency = 'EGP') {
+    const n = Number(value ?? 0).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+    return `${currency} ${n}`;
+}
+
+function refundStatusChip(status) {
+    const tone = {
+        requested: 'bg-amber-50 text-amber-700',
+        approved: 'bg-emerald-50 text-emerald-700',
+        rejected: 'bg-slate-100 text-slate-600',
+        paid: 'bg-indigo-50 text-indigo-700',
+    }[status] ?? 'bg-slate-100 text-slate-600';
+    return (
+        <span className={'inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ' + tone}>
+            {status}
+        </span>
+    );
+}
+
+export default function ReturnShow({ return: ret, reasons, refund_context }) {
     const can = useCan();
 
     const inspect = useForm({
@@ -14,9 +36,19 @@ export default function ReturnShow({ return: ret, reasons }) {
         notes: ret.notes ?? '',
     });
 
+    const requestRefund = useForm({
+        amount: refund_context?.refundable_amount ?? ret.refund_amount,
+        reason: `Refund from return #${ret.id}`,
+    });
+
     const submitInspect = (e) => {
         e.preventDefault();
         inspect.post(route('returns.inspect', ret.id));
+    };
+
+    const submitRequestRefund = (e) => {
+        e.preventDefault();
+        requestRefund.post(route('returns.request-refund', ret.id));
     };
 
     const closeReturn = () => {
@@ -89,10 +121,83 @@ export default function ReturnShow({ return: ret, reasons }) {
 
                     <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm">
                         <h2 className="text-sm font-semibold text-slate-700">Refund</h2>
-                        <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-800">{Number(ret.refund_amount).toFixed(2)}</div>
-                        <div className="mt-1 text-xs text-slate-500">Shipping loss: {Number(ret.shipping_loss_amount).toFixed(2)}</div>
+                        <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-800">{fmtAmount(ret.refund_amount)}</div>
+                        <div className="mt-1 text-xs text-slate-500">Shipping loss: {fmtAmount(ret.shipping_loss_amount)}</div>
                         {ret.inspected_by && (
                             <div className="mt-2 text-xs text-slate-500">Inspected by {ret.inspected_by.name} on {ret.inspected_at?.split('T')[0]}</div>
+                        )}
+
+                        {/* Phase 5C — linked refunds + request action */}
+                        {refund_context && (
+                            <div className="mt-4 border-t border-slate-100 pt-3">
+                                <div className="flex items-center justify-between text-xs text-slate-500">
+                                    <span>Active refunds total</span>
+                                    <span className="tabular-nums">{fmtAmount(refund_context.active_refund_total)}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-xs text-slate-500">
+                                    <span>Refundable remaining</span>
+                                    <span className={'tabular-nums ' + (refund_context.refundable_amount > 0 ? 'text-slate-700 font-medium' : 'text-slate-400')}>
+                                        {fmtAmount(refund_context.refundable_amount)}
+                                    </span>
+                                </div>
+
+                                {(ret.refunds ?? []).length > 0 && (
+                                    <ul className="mt-3 space-y-1.5">
+                                        {ret.refunds.map((r) => (
+                                            <li key={r.id} className="flex items-center justify-between rounded border border-slate-100 bg-slate-50 px-2 py-1 text-xs">
+                                                <span>
+                                                    <Link href={route('refunds.index')} className="font-mono text-slate-600 hover:underline">#{r.id}</Link>
+                                                    <span className="ml-1.5">{refundStatusChip(r.status)}</span>
+                                                </span>
+                                                <span className="tabular-nums font-medium text-slate-700">{fmtAmount(r.amount)}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+
+                                {can('refunds.create') && refund_context.can_request_refund && (
+                                    <form onSubmit={submitRequestRefund} className="mt-3 space-y-2 rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                                        <label className="text-[11px] uppercase tracking-wide text-indigo-800">
+                                            Request refund
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0.01"
+                                            max={refund_context.refundable_amount}
+                                            value={requestRefund.data.amount ?? ''}
+                                            onChange={(e) => requestRefund.setData('amount', e.target.value)}
+                                            placeholder="Amount"
+                                            className="block w-full rounded-md border-indigo-200 text-xs"
+                                        />
+                                        <textarea
+                                            value={requestRefund.data.reason ?? ''}
+                                            onChange={(e) => requestRefund.setData('reason', e.target.value)}
+                                            placeholder="Reason (optional)"
+                                            rows={2}
+                                            className="block w-full rounded-md border-indigo-200 text-xs"
+                                        />
+                                        <button
+                                            type="submit"
+                                            disabled={requestRefund.processing}
+                                            className="w-full rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+                                        >
+                                            {requestRefund.processing ? 'Requesting…' : 'Request refund'}
+                                        </button>
+                                        <p className="text-[10px] text-indigo-700">
+                                            Creates a <strong>requested</strong> refund. Approval and payment continue in the Refunds module.
+                                        </p>
+                                    </form>
+                                )}
+
+                                {refund_context.can_request_refund === false && refund_context.refund_base_amount > 0 && (
+                                    <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-500">
+                                        {refund_context.refundable_amount <= 0
+                                            ? 'No refundable amount remaining — all has been covered by active refunds.'
+                                            : `Refund requests are only available after inspection (eligible statuses: ${refund_context.eligible_statuses.join(', ')}).`}
+                                    </p>
+                                )}
+                            </div>
                         )}
                     </div>
                 </div>

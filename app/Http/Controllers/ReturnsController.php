@@ -6,18 +6,23 @@ use App\Http\Requests\OrderReturnRequest;
 use App\Http\Requests\ReturnInspectRequest;
 use App\Models\Order;
 use App\Models\OrderReturn;
+use App\Models\Refund;
 use App\Models\ReturnReason;
+use App\Services\RefundService;
 use App\Services\ReturnService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
+use InvalidArgumentException;
+use RuntimeException;
 use Throwable;
 
 class ReturnsController extends Controller
 {
     public function __construct(
         private readonly ReturnService $returns,
+        private readonly RefundService $refunds,
     ) {}
 
     public function index(Request $request): Response
@@ -101,12 +106,59 @@ class ReturnsController extends Controller
             'returnReason',
             'shippingCompany:id,name',
             'inspectedBy:id,name',
+            // Phase 5C — surface refunds linked to this return so the
+            // UI can show their lifecycle status alongside the return.
+            'refunds' => fn ($q) => $q->with('requestedBy:id,name', 'approvedBy:id,name', 'rejectedBy:id,name', 'paidBy:id,name')
+                ->orderBy('id'),
         ]);
+
+        // Compute eligibility + remaining refundable amount so the UI
+        // can decide whether to surface the "Request refund" action.
+        $activeRefundsTotal = (float) $return->refunds()
+            ->whereIn('status', Refund::ACTIVE_STATUSES)
+            ->sum('amount');
+        $refundable = max(0.0, (float) $return->refund_amount - $activeRefundsTotal);
 
         return Inertia::render('Returns/Show', [
             'return' => $return,
             'reasons' => ReturnReason::where('status', 'Active')->orderBy('name')->get(['id', 'name']),
+            // Phase 5C — refund context for the show page.
+            'refund_context' => [
+                'can_request_refund' => $return->canRequestRefund() && $refundable > 0,
+                'eligible_statuses' => OrderReturn::REFUND_ELIGIBLE_STATUSES,
+                'refundable_amount' => $refundable,
+                'active_refund_total' => $activeRefundsTotal,
+                'refund_base_amount' => (float) $return->refund_amount,
+            ],
         ]);
+    }
+
+    /**
+     * Phase 5C — create a `requested` refund linked to this return.
+     *
+     * Always creates the refund in `requested` status. Approval and
+     * payment continue to flow through the existing Refund module
+     * (`refunds.approve` then `refunds.pay`). No cashbox transaction
+     * is created here.
+     *
+     * Permission: `refunds.create` (reused; no new slug introduced).
+     */
+    public function requestRefund(Request $request, OrderReturn $return): RedirectResponse
+    {
+        $data = $request->validate([
+            'amount' => ['nullable', 'numeric', 'gt:0'],
+            'reason' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        try {
+            $refund = $this->refunds->createFromReturn($return, $request->user(), $data);
+        } catch (InvalidArgumentException|RuntimeException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        return redirect()
+            ->route('refunds.index')
+            ->with('success', "Refund #{$refund->id} requested for return #{$return->id}.");
     }
 
     public function inspect(ReturnInspectRequest $request, OrderReturn $return): RedirectResponse

@@ -309,6 +309,11 @@ Route::middleware(['auth', 'active'])->group(function () {
         ->name('returns.inspect');
     Route::middleware('permission:returns.approve')->post('/returns/{return}/close', [ReturnsController::class, 'close'])
         ->name('returns.close');
+    // Finance Phase 5C — request a (paperwork-only) refund from an
+    // inspected return. Reuses the existing `refunds.create`
+    // permission per Phase 0 design — no new slug introduced.
+    Route::middleware('permission:refunds.create')->post('/returns/{return}/request-refund', [ReturnsController::class, 'requestRefund'])
+        ->name('returns.request-refund');
 
     Route::middleware('permission:returns.view')->get('/return-reasons', [ReturnReasonsController::class, 'index'])
         ->name('return-reasons.index');
