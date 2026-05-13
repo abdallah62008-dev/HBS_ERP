@@ -113,6 +113,12 @@ class Cashbox extends Model
      * Compute the current balance from the ledger. Not cached — callers
      * that need the value repeatedly within one request should hold the
      * result themselves.
+     *
+     * Performance Phase 2: this method is fine for single-cashbox
+     * lookups but **must not be called inside a loop over multiple
+     * cashboxes** — that produces an N+1 pattern (one `SUM` per
+     * iteration). When you need balances for many cashboxes, use one
+     * grouped query, e.g. `FinanceReportsService::allTimeBalancesByCashboxId()`.
      */
     public function balance(): float
     {

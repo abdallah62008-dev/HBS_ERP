@@ -204,17 +204,23 @@ class DashboardMetricsService
      */
     public function deliveredCounts(CarbonImmutable $today, CarbonImmutable $monthStart): array
     {
-        $todayCount = Order::query()
-            ->whereNotNull('delivered_at')
-            ->whereDate('delivered_at', $today)
-            ->count();
-
-        $mtdCount = Order::query()
+        // Performance Phase 2 — merge two COUNT queries (today + mtd)
+        // into one `SUM(CASE WHEN ... END)` over the MTD cohort. The
+        // cohort is `delivered_at >= $monthStart`; "today" is a subset.
+        // Identical numbers to the previous two-query implementation.
+        $row = Order::query()
             ->whereNotNull('delivered_at')
             ->where('delivered_at', '>=', $monthStart)
-            ->count();
+            ->selectRaw(
+                'COUNT(*) AS mtd, SUM(CASE WHEN DATE(delivered_at) = ? THEN 1 ELSE 0 END) AS today',
+                [$today->toDateString()]
+            )
+            ->first();
 
-        return ['today' => $todayCount, 'mtd' => $mtdCount];
+        return [
+            'today' => (int) ($row->today ?? 0),
+            'mtd' => (int) ($row->mtd ?? 0),
+        ];
     }
 
     /**

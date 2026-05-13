@@ -50,7 +50,18 @@ class FinanceReportsService
         ['from' => $from, 'to' => $to] = $this->dateRange($from, $to);
         [$fromAt, $toAt] = $this->boundary($from, $to);
 
-        $totalBalance = (float) Cashbox::active()->get()->sum(fn (Cashbox $c) => $c->balance());
+        // Performance Phase 2 — replace the N+1 cashbox-balance loop
+        // (`Cashbox::active()->get()->sum($c->balance())`) with a single
+        // grouped query. The balance value is identical to the previous
+        // `Cashbox::balance()` per-cashbox call — both sum
+        // `cashbox_transactions.amount`. Ledger remains source of truth;
+        // nothing cached, nothing denormalized.
+        $balances = $this->allTimeBalancesByCashboxId();
+        $activeIds = Cashbox::active()->pluck('id')->all();
+        $totalBalance = 0.0;
+        foreach ($activeIds as $id) {
+            $totalBalance += (float) ($balances[$id] ?? 0);
+        }
 
         $tx = CashboxTransaction::query()
             ->whereBetween('occurred_at', [$fromAt, $toAt]);
@@ -112,7 +123,13 @@ class FinanceReportsService
             ->get()
             ->keyBy('cashbox_id');
 
-        $rows = $cashboxes->map(function (Cashbox $c) use ($stats) {
+        // Performance Phase 2 — replace the per-row `$c->balance()` call
+        // (N+1 across `$cashboxes`) with a single grouped lookup.
+        // Identical numbers to the previous logic; one SUM query instead
+        // of one-per-cashbox.
+        $balances = $this->allTimeBalancesByCashboxId();
+
+        $rows = $cashboxes->map(function (Cashbox $c) use ($stats, $balances) {
             $s = $stats[$c->id] ?? null;
             return [
                 'id' => $c->id,
@@ -126,7 +143,7 @@ class FinanceReportsService
                 'outflow' => (float) ($s->outflow ?? 0),
                 'tx_count' => (int) ($s->tx_count ?? 0),
                 'last_tx' => $s->last_tx ?? null,
-                'balance' => $c->balance(),
+                'balance' => (float) ($balances[$c->id] ?? 0),
             ];
         })->values();
 
@@ -516,5 +533,34 @@ class FinanceReportsService
             Carbon::parse($from)->startOfDay(),
             Carbon::parse($to)->endOfDay(),
         ];
+    }
+
+    /**
+     * Performance Phase 2 — single-query lookup of every cashbox's
+     * all-time balance, keyed by `cashbox_id`. Replaces the legacy
+     * pattern of calling `Cashbox::balance()` once per cashbox inside
+     * a loop, which was N+1 by design.
+     *
+     * The result is byte-identical to looping `Cashbox::balance()`
+     * over the same set of cashboxes: both compute
+     * `SUM(cashbox_transactions.amount) GROUP BY cashbox_id`. The
+     * difference is one query vs. N queries.
+     *
+     * The composite index `(cashbox_id, occurred_at)` on
+     * `cashbox_transactions` covers this GROUP BY. Cashboxes with no
+     * transactions are absent from the returned collection — callers
+     * should default missing keys to 0 (e.g. `$balances[$id] ?? 0`).
+     *
+     * Do NOT call this inside a loop. It is the loop-replacement.
+     *
+     * @return \Illuminate\Support\Collection<int, float>  cashbox_id => balance
+     */
+    private function allTimeBalancesByCashboxId(): \Illuminate\Support\Collection
+    {
+        return CashboxTransaction::query()
+            ->selectRaw('cashbox_id, COALESCE(SUM(amount), 0) AS bal')
+            ->groupBy('cashbox_id')
+            ->pluck('bal', 'cashbox_id')
+            ->map(fn ($v) => (float) $v);
     }
 }
