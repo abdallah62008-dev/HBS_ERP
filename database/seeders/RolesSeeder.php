@@ -152,8 +152,11 @@ class RolesSeeder extends Seeder
             // Finance Phase 5A — accountant can view, create, and reject
             // refunds. `approve` is intentionally NOT granted (manager
             // approves; accountant executes — per Phase 0 separation of
-            // duties). `pay` will land in Phase 5B as its own grant.
+            // duties).
             'refunds.view', 'refunds.create', 'refunds.reject',
+            // Finance Phase 5B — accountant is the one who actually pays
+            // the refund from the cashbox.
+            'refunds.pay',
         ];
 
         $marketer = [

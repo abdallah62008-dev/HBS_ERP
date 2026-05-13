@@ -212,6 +212,16 @@ class Refund extends Model
         return $this->isRequested();
     }
 
+    /**
+     * Phase 5B: only approved refunds may be paid. Requested refunds
+     * must be approved first; rejected and already-paid refunds are
+     * terminal.
+     */
+    public function canBePaid(): bool
+    {
+        return $this->isApproved() && $this->cashbox_transaction_id === null;
+    }
+
     /* ────────────────────── Scopes ────────────────────── */
 
     public function scopeStatus(Builder $query, ?string $status): Builder

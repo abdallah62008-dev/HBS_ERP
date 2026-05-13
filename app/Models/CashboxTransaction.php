@@ -50,6 +50,7 @@ class CashboxTransaction extends Model
     public const SOURCE_TRANSFER = 'transfer';
     public const SOURCE_COLLECTION = 'collection';
     public const SOURCE_EXPENSE = 'expense';
+    public const SOURCE_REFUND = 'refund';
 
     /** Phase 1 source_type whitelist. Later phases extend this list. */
     public const PHASE_1_SOURCE_TYPES = [
@@ -79,6 +80,16 @@ class CashboxTransaction extends Model
         self::SOURCE_TRANSFER,
         self::SOURCE_COLLECTION,
         self::SOURCE_EXPENSE,
+    ];
+
+    /** Phase 5B adds the `refund` source_type (OUT, written on refund.pay). */
+    public const PHASE_5B_SOURCE_TYPES = [
+        self::SOURCE_OPENING_BALANCE,
+        self::SOURCE_ADJUSTMENT,
+        self::SOURCE_TRANSFER,
+        self::SOURCE_COLLECTION,
+        self::SOURCE_EXPENSE,
+        self::SOURCE_REFUND,
     ];
 
     protected $fillable = [

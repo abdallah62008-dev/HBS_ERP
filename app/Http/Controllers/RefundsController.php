@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\RefundRequest;
+use App\Models\Cashbox;
+use App\Models\PaymentMethod;
 use App\Models\Refund;
 use App\Services\AuditLogService;
 use App\Services\RefundService;
@@ -41,6 +43,10 @@ class RefundsController extends Controller
                 'requestedBy:id,name',
                 'approvedBy:id,name',
                 'rejectedBy:id,name',
+                // Phase 5B: surface payment metadata for paid refunds.
+                'paidBy:id,name',
+                'cashbox:id,name,currency_code',
+                'paymentMethod:id,name,code',
             ])
             ->status($filters['status'] ?? null)
             ->when($filters['collection_id'] ?? null, fn ($q, $v) => $q->where('collection_id', $v))
@@ -61,9 +67,11 @@ class RefundsController extends Controller
             'requested_count' => Refund::requested()->count(),
             'approved_count' => Refund::approved()->count(),
             'rejected_count' => Refund::rejected()->count(),
+            'paid_count' => Refund::where('status', Refund::STATUS_PAID)->count(),
             'requested_amount' => (float) Refund::requested()->sum('amount'),
             'approved_amount' => (float) Refund::approved()->sum('amount'),
             'rejected_amount' => (float) Refund::rejected()->sum('amount'),
+            'paid_amount' => (float) Refund::where('status', Refund::STATUS_PAID)->sum('amount'),
         ];
 
         return Inertia::render('Refunds/Index', [
@@ -71,6 +79,20 @@ class RefundsController extends Controller
             'filters' => $filters,
             'totals' => $totals,
             'statuses' => Refund::STATUSES,
+            // Phase 5B — Pay form needs the active cashboxes (with live
+            // balance so the UI can warn before submit) + payment methods.
+            'cashboxes' => Cashbox::active()
+                ->orderBy('name')
+                ->get(['id', 'name', 'currency_code', 'allow_negative_balance'])
+                ->map(fn (Cashbox $c) => [
+                    'id' => $c->id,
+                    'name' => $c->name,
+                    'currency_code' => $c->currency_code,
+                    'allow_negative_balance' => $c->allow_negative_balance,
+                    'balance' => $c->balance(),
+                ])
+                ->all(),
+            'payment_methods' => PaymentMethod::active()->orderBy('name')->get(['id', 'name', 'code']),
         ]);
     }
 
@@ -193,5 +215,31 @@ class RefundsController extends Controller
         }
 
         return back()->with('success', 'Refund rejected.');
+    }
+
+    /**
+     * Phase 5B — pay an approved refund.
+     *
+     * Writes a cashbox OUT transaction and marks the refund `paid`.
+     * Gated by `refunds.pay` permission in the route. Service-layer
+     * exceptions (overdraft, double-pay race, inactive cashbox /
+     * payment method, ineligible status, over-refund) surface as
+     * flash errors rather than 500s.
+     */
+    public function pay(Request $request, Refund $refund): RedirectResponse
+    {
+        $data = $request->validate([
+            'cashbox_id' => ['required', 'integer', 'exists:cashboxes,id'],
+            'payment_method_id' => ['required', 'integer', 'exists:payment_methods,id'],
+            'occurred_at' => ['nullable', 'date'],
+        ]);
+
+        try {
+            $this->service->pay($refund, $request->user(), $data);
+        } catch (InvalidArgumentException|RuntimeException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        return back()->with('success', 'Refund paid from cashbox.');
     }
 }

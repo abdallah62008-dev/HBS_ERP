@@ -3,11 +3,13 @@
 namespace Tests\Feature\Finance;
 
 use App\Models\AuditLog;
+use App\Models\Cashbox;
 use App\Models\CashboxTransaction;
 use App\Models\Collection;
 use App\Models\Customer;
 use App\Models\FiscalYear;
 use App\Models\Order;
+use App\Models\PaymentMethod;
 use App\Models\Permission;
 use App\Models\Refund;
 use App\Models\Role;
@@ -343,12 +345,19 @@ class RefundTest extends TestCase
 
     /* ────────────────────── 7. Phase 5A absence guarantees ────────────────────── */
 
-    public function test_no_pay_route_exists(): void
+    public function test_pay_route_exists_with_correct_verb_and_permission(): void
     {
-        $hasPayRoute = collect(Route::getRoutes())
-            ->contains(fn ($r) => str_contains($r->uri(), 'refunds') && str_contains($r->uri(), 'pay'));
+        // Phase 5A originally asserted "no pay route exists". Phase 5B
+        // legitimately adds it. This test now pins the opposite
+        // contract: there IS exactly one POST route at the expected
+        // name, gated by the dedicated permission.
+        $payRoutes = collect(Route::getRoutes())
+            ->filter(fn ($r) => $r->getName() === 'refunds.pay')
+            ->values();
 
-        $this->assertFalse($hasPayRoute, 'Phase 5A must not expose a refunds.pay route.');
+        $this->assertCount(1, $payRoutes, 'Phase 5B must expose exactly one refunds.pay route.');
+        $this->assertContains('POST', $payRoutes->first()->methods());
+        $this->assertSame('refunds/{refund}/pay', $payRoutes->first()->uri());
     }
 
     public function test_approve_and_reject_do_not_create_cashbox_transaction(): void
@@ -412,7 +421,422 @@ class RefundTest extends TestCase
             ->where('record_id', $other->id)->count());
     }
 
-    /* ────────────────────── Helpers ────────────────────── */
+    /* ════════════════════════════════════════════════════════════════════
+     * Phase 5B — Refund Payment + Cashbox OUT
+     * ════════════════════════════════════════════════════════════════════
+     */
+
+    /* ────────────────────── 9. Pay permission gating ────────────────────── */
+
+    public function test_user_with_refunds_pay_can_pay_approved_refund(): void
+    {
+        $refund = $this->makeApprovedRefund();
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+
+        $user = $this->userWith(['refunds.view', 'refunds.pay']);
+
+        $this->actingAs($user)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $fresh = $refund->fresh();
+        $this->assertSame('paid', $fresh->status);
+        $this->assertSame($user->id, $fresh->paid_by);
+        $this->assertNotNull($fresh->paid_at);
+        $this->assertSame($cashbox->id, $fresh->cashbox_id);
+        $this->assertSame($method->id, $fresh->payment_method_id);
+        $this->assertNotNull($fresh->cashbox_transaction_id);
+    }
+
+    public function test_user_without_refunds_pay_cannot_pay(): void
+    {
+        $refund = $this->makeApprovedRefund();
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+
+        // Has approve + reject but NOT pay.
+        $user = $this->userWith(['refunds.view', 'refunds.approve', 'refunds.reject']);
+
+        $this->actingAs($user)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertForbidden();
+
+        $this->assertSame('approved', $refund->fresh()->status);
+        $this->assertSame(0, CashboxTransaction::where('source_type', 'refund')->count());
+    }
+
+    /* ────────────────────── 10. Forbidden status transitions to paid ────────────────────── */
+
+    public function test_requested_refund_cannot_be_paid(): void
+    {
+        $refund = $this->makeRefund(); // status: requested
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame('requested', $refund->fresh()->status);
+        $this->assertSame(0, CashboxTransaction::where('source_type', 'refund')->count());
+    }
+
+    public function test_rejected_refund_cannot_be_paid(): void
+    {
+        $refund = $this->makeRefund();
+        app(\App\Services\RefundService::class)->reject($refund);
+
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame('rejected', $refund->fresh()->status);
+        $this->assertSame(0, CashboxTransaction::where('source_type', 'refund')->count());
+    }
+
+    public function test_paid_refund_cannot_be_paid_again(): void
+    {
+        $refund = $this->makeApprovedRefund();
+        $cashbox = $this->makeCashbox(['opening_balance' => 10000]);
+        $method = $this->getMethod('cash');
+
+        // First payment succeeds.
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame('paid', $refund->fresh()->status);
+
+        // Second payment attempt — must not write another transaction.
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame(1, CashboxTransaction::where('source_type', 'refund')->count());
+    }
+
+    /* ────────────────────── 11. Cashbox OUT transaction shape ────────────────────── */
+
+    public function test_paying_approved_refund_creates_one_out_transaction_with_correct_metadata(): void
+    {
+        $refund = $this->makeApprovedRefund(['amount' => 250]);
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $txs = CashboxTransaction::where('source_type', 'refund')
+            ->where('source_id', $refund->id)
+            ->get();
+
+        $this->assertCount(1, $txs);
+        $tx = $txs->first();
+        $this->assertSame('out', $tx->direction);
+        $this->assertSame('-250.00', (string) $tx->amount);
+        $this->assertSame($cashbox->id, $tx->cashbox_id);
+        $this->assertSame($method->id, $tx->payment_method_id);
+        $this->assertSame('refund', $tx->source_type);
+        $this->assertSame($refund->id, $tx->source_id);
+    }
+
+    public function test_paying_refund_decreases_cashbox_balance(): void
+    {
+        $refund = $this->makeApprovedRefund(['amount' => 200]);
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+
+        $this->assertSame(1000.0, $cashbox->fresh()->balance());
+
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame(800.0, $cashbox->fresh()->balance(), '1000 - 200 = 800');
+    }
+
+    /* ────────────────────── 12. Balance / overdraft guard ────────────────────── */
+
+    public function test_paying_refund_is_blocked_when_overdraft_disabled(): void
+    {
+        $refund = $this->makeApprovedRefund(['amount' => 500]);
+        $cashbox = $this->makeCashbox(['opening_balance' => 100, 'allow_negative_balance' => false]);
+        $method = $this->getMethod('cash');
+
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame('approved', $refund->fresh()->status);
+        $this->assertSame(100.0, $cashbox->fresh()->balance(), 'Cashbox unchanged.');
+        $this->assertSame(0, CashboxTransaction::where('source_type', 'refund')->count());
+    }
+
+    public function test_paying_refund_is_allowed_when_overdraft_enabled(): void
+    {
+        $refund = $this->makeApprovedRefund(['amount' => 500]);
+        $cashbox = $this->makeCashbox(['opening_balance' => 100, 'allow_negative_balance' => true]);
+        $method = $this->getMethod('cash');
+
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame('paid', $refund->fresh()->status);
+        $this->assertSame(-400.0, $cashbox->fresh()->balance(), '100 - 500 = -400 (permitted).');
+    }
+
+    /* ────────────────────── 13. Over-refund guard re-run during pay ────────────────────── */
+
+    public function test_over_refund_guard_is_re_run_during_pay(): void
+    {
+        $collection = $this->makeCollection(amountCollected: 100);
+
+        // Two approved refunds whose combined sum is over base (50 + 60 = 110 > 100).
+        // This requires bypassing the create-time guard (simulate drift).
+        $a = Refund::create([
+            'collection_id' => $collection->id,
+            'amount' => 50,
+            'status' => 'approved',
+            'requested_by' => $this->admin->id,
+            'approved_by' => $this->admin->id,
+            'approved_at' => now(),
+        ]);
+        Refund::create([
+            'collection_id' => $collection->id,
+            'amount' => 60,
+            'status' => 'approved',
+            'requested_by' => $this->admin->id,
+            'approved_by' => $this->admin->id,
+            'approved_at' => now(),
+        ]);
+
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+
+        // Paying `a` (50) — existing active (excluding a) = b (60). Total
+        // 60 + 50 = 110 > 100 → service throws → controller surfaces a
+        // flash error and no transaction is written.
+        $this->actingAs($this->admin)->post('/refunds/' . $a->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame('approved', $a->fresh()->status, 'Pay must be blocked by over-refund guard.');
+        $this->assertSame(0, CashboxTransaction::where('source_type', 'refund')->count());
+    }
+
+    public function test_rejected_refund_is_excluded_from_over_refund_sum_when_paying(): void
+    {
+        $collection = $this->makeCollection(amountCollected: 100);
+
+        // Rejected refund of 60 — does NOT count toward active sum.
+        $rejected = Refund::create([
+            'collection_id' => $collection->id,
+            'amount' => 60,
+            'status' => 'requested',
+            'requested_by' => $this->admin->id,
+        ]);
+        app(\App\Services\RefundService::class)->reject($rejected);
+
+        // Approved refund of 70 — should pay successfully (60 rejected
+        // excluded; existing active sum = 0; proposed 70 ≤ 100).
+        $a = Refund::create([
+            'collection_id' => $collection->id,
+            'amount' => 70,
+            'status' => 'approved',
+            'requested_by' => $this->admin->id,
+            'approved_by' => $this->admin->id,
+            'approved_at' => now(),
+        ]);
+
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+
+        $this->actingAs($this->admin)->post('/refunds/' . $a->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame('paid', $a->fresh()->status);
+    }
+
+    /* ────────────────────── 14. Paid refund immutability ────────────────────── */
+
+    public function test_paid_refund_cannot_be_edited(): void
+    {
+        $refund = $this->makeApprovedRefund(['amount' => 200]);
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+        $this->assertSame('paid', $refund->fresh()->status);
+
+        // Attempt edit.
+        $this->actingAs($this->admin)->put('/refunds/' . $refund->id, [
+            'amount' => 9999,
+            'reason' => 'attempted drift',
+        ])->assertRedirect();
+
+        $this->assertSame('200.00', (string) $refund->fresh()->amount, 'Paid refund must be immutable.');
+    }
+
+    public function test_paid_refund_cannot_be_deleted_via_controller(): void
+    {
+        $refund = $this->makeApprovedRefund();
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->actingAs($this->admin)
+            ->delete('/refunds/' . $refund->id)
+            ->assertRedirect();
+
+        $this->assertNotNull(Refund::find($refund->id));
+    }
+
+    public function test_paid_refund_cannot_be_deleted_via_model(): void
+    {
+        $refund = $this->makeApprovedRefund();
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+        $this->actingAs($this->admin);
+        app(\App\Services\RefundService::class)->pay($refund, $this->admin, [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ]);
+
+        // Direct model delete.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot be deleted');
+        $refund->fresh()->delete();
+    }
+
+    /* ────────────────────── 15. Inactive cashbox / method rejection ────────────────────── */
+
+    public function test_inactive_cashbox_rejects_pay(): void
+    {
+        $refund = $this->makeApprovedRefund();
+        $cashbox = $this->makeCashbox(['is_active' => false]);
+        $method = $this->getMethod('cash');
+
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame('approved', $refund->fresh()->status);
+        $this->assertSame(0, CashboxTransaction::where('source_type', 'refund')->count());
+    }
+
+    public function test_inactive_payment_method_rejects_pay(): void
+    {
+        $refund = $this->makeApprovedRefund();
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+        $method->update(['is_active' => false]);
+
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        $this->assertSame('approved', $refund->fresh()->status);
+        $this->assertSame(0, CashboxTransaction::where('source_type', 'refund')->count());
+    }
+
+    /* ────────────────────── 16. Audit log for pay ────────────────────── */
+
+    public function test_refund_paid_audit_log_is_written(): void
+    {
+        $refund = $this->makeApprovedRefund();
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+        $method = $this->getMethod('cash');
+
+        $this->actingAs($this->admin)->post('/refunds/' . $refund->id . '/pay', [
+            'cashbox_id' => $cashbox->id,
+            'payment_method_id' => $method->id,
+        ])->assertRedirect();
+
+        // refund_paid audit row written on the refund.
+        $this->assertSame(1, AuditLog::where('module', 'finance.refund')
+            ->where('action', 'refund_paid')
+            ->where('record_type', Refund::class)
+            ->where('record_id', $refund->id)->count());
+
+        // cashbox_transaction.created audit row written on the new tx.
+        $this->assertSame(1, AuditLog::where('module', 'finance.refund')
+            ->where('action', 'cashbox_transaction.created')
+            ->where('record_type', CashboxTransaction::class)->count());
+    }
+
+    /* ────────────────────── Phase 5B helpers ────────────────────── */
+
+    private function makeApprovedRefund(array $overrides = []): Refund
+    {
+        $refund = $this->makeRefund($overrides);
+        app(\App\Services\RefundService::class)->approve($refund);
+        return $refund->fresh();
+    }
+
+    private function makeCashbox(array $overrides = []): Cashbox
+    {
+        static $counter = 0;
+        $counter++;
+        $opening = (float) ($overrides['opening_balance'] ?? 0);
+
+        $cashbox = Cashbox::create(array_merge([
+            'name' => 'Refund Cashbox ' . $counter,
+            'type' => 'cash',
+            'currency_code' => 'EGP',
+            'opening_balance' => $opening,
+            'allow_negative_balance' => true,
+            'is_active' => true,
+            'created_by' => $this->admin->id,
+            'updated_by' => $this->admin->id,
+        ], $overrides));
+
+        if ($opening != 0) {
+            CashboxTransaction::create([
+                'cashbox_id' => $cashbox->id,
+                'direction' => $opening >= 0 ? 'in' : 'out',
+                'amount' => $opening,
+                'occurred_at' => now(),
+                'source_type' => 'opening_balance',
+                'notes' => 'Test fixture opening balance.',
+                'created_by' => $this->admin->id,
+            ]);
+        }
+
+        return $cashbox;
+    }
+
+    private function getMethod(string $code): PaymentMethod
+    {
+        return PaymentMethod::where('code', $code)->firstOrFail();
+    }
+
+    /* ────────────────────── Helpers (Phase 5A) ────────────────────── */
 
     private function makeRefund(array $overrides = []): Refund
     {

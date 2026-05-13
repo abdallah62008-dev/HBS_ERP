@@ -379,6 +379,10 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:refunds.create')->delete('/refunds/{refund}', [RefundsController::class, 'destroy'])->name('refunds.destroy');
     Route::middleware('permission:refunds.approve')->post('/refunds/{refund}/approve', [RefundsController::class, 'approve'])->name('refunds.approve');
     Route::middleware('permission:refunds.reject')->post('/refunds/{refund}/reject', [RefundsController::class, 'reject'])->name('refunds.reject');
+    // Finance Phase 5B — pay an approved refund from a cashbox. Writes
+    // the OUT transaction; separate permission so request / approve /
+    // pay remain three distinct authorities (separation of duties).
+    Route::middleware('permission:refunds.pay')->post('/refunds/{refund}/pay', [RefundsController::class, 'pay'])->name('refunds.pay');
 
     Route::middleware('permission:expenses.view')->get('/expense-categories', [ExpenseCategoriesController::class, 'index'])->name('expense-categories.index');
     Route::middleware('permission:expenses.edit')->post('/expense-categories', [ExpenseCategoriesController::class, 'store'])->name('expense-categories.store');

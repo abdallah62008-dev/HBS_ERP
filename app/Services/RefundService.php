@@ -2,9 +2,13 @@
 
 namespace App\Services;
 
+use App\Models\Cashbox;
+use App\Models\CashboxTransaction;
 use App\Models\Collection;
+use App\Models\PaymentMethod;
 use App\Models\Refund;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -131,6 +135,143 @@ class RefundService
             );
 
             return $locked;
+        });
+    }
+
+    /**
+     * Phase 5B — Pay an approved refund.
+     *
+     * Writes a single cashbox OUT transaction and stamps the refund as
+     * paid. The full sequence runs inside one `DB::transaction` with
+     * the same row-lock pattern proven by Phase 4.5 hardening:
+     *
+     *   1. lock the Refund row (block double-pay)
+     *   2. lock the Cashbox row (block overdraft race)
+     *   3. re-run every guard against the locked state
+     *   4. write the cashbox_transactions row (source_type='refund')
+     *   5. update the refund (status='paid', paid_at, paid_by,
+     *      cashbox_id, payment_method_id, cashbox_transaction_id)
+     *
+     * Cheap checks (active cashbox, active payment method) happen
+     * before the transaction so the caller gets a clean error before
+     * any locks are acquired.
+     *
+     * @param  array{cashbox_id:int|string, payment_method_id:int|string, occurred_at?:?string}  $data
+     */
+    public function pay(Refund $refund, ?User $user, array $data): Refund
+    {
+        if (! $refund->canBePaid()) {
+            throw new RuntimeException(
+                "Refund #{$refund->id} cannot be paid (status: {$refund->status})."
+            );
+        }
+
+        $cashbox = Cashbox::findOrFail((int) $data['cashbox_id']);
+        $paymentMethod = PaymentMethod::findOrFail((int) $data['payment_method_id']);
+
+        // Cheap, non-racy checks outside the transaction.
+        if (! $cashbox->is_active) {
+            throw new RuntimeException("Cashbox \"{$cashbox->name}\" is inactive.");
+        }
+        if (! $paymentMethod->is_active) {
+            throw new RuntimeException("Payment method \"{$paymentMethod->name}\" is inactive.");
+        }
+
+        $defaultOccurredAt = ! empty($data['occurred_at'])
+            ? Carbon::parse($data['occurred_at'])
+            : null;
+
+        $actor = $user ?? Auth::user();
+
+        return DB::transaction(function () use ($refund, $cashbox, $paymentMethod, $defaultOccurredAt, $actor) {
+            // Lock the refund row first to serialise concurrent pay attempts.
+            $locked = Refund::query()->lockForUpdate()->findOrFail($refund->id);
+
+            if (! $locked->canBePaid()) {
+                throw new RuntimeException(
+                    "Refund #{$locked->id} cannot be paid (status: {$locked->status})."
+                );
+            }
+
+            // Lock the cashbox row so the balance check below sees a
+            // stable, exclusive view of the ledger sum.
+            $lockedCashbox = Cashbox::query()->lockForUpdate()->findOrFail($cashbox->id);
+
+            // Re-run cheap checks on the locked rows (race protection
+            // against deactivation that landed between the pre-tx check
+            // and now).
+            if (! $lockedCashbox->is_active) {
+                throw new RuntimeException("Cashbox \"{$lockedCashbox->name}\" is inactive.");
+            }
+
+            // Balance guard (skipped if the cashbox permits negatives).
+            $amount = (float) $locked->amount;
+            if (! $lockedCashbox->allow_negative_balance) {
+                $currentBalance = $lockedCashbox->balance();
+                if ($currentBalance < $amount) {
+                    throw new RuntimeException(
+                        "Cashbox \"{$lockedCashbox->name}\" has insufficient balance "
+                        . "({$currentBalance} < {$amount}) and does not permit negative balances."
+                    );
+                }
+            }
+
+            // Re-run the over-refund guard. Paying THIS refund doesn't
+            // change the sum of active refunds (it stays active in the
+            // 'paid' status), so the guard validates the current world
+            // state and excludes this refund from the existing-sum to
+            // avoid double-counting.
+            $this->assertRefundableAmount(
+                excludeRefundId: $locked->id,
+                collectionId: $locked->collection_id,
+                proposedAmount: $amount,
+            );
+
+            $occurredAt = $defaultOccurredAt ?? now();
+
+            $tx = CashboxTransaction::create([
+                'cashbox_id' => $lockedCashbox->id,
+                'direction' => CashboxTransaction::DIRECTION_OUT,
+                'amount' => -1 * round($amount, 2), // signed negative
+                'occurred_at' => $occurredAt,
+                'source_type' => CashboxTransaction::SOURCE_REFUND,
+                'source_id' => $locked->id,
+                'payment_method_id' => $paymentMethod->id,
+                'notes' => "Refund #{$locked->id}"
+                    . ($locked->order_id ? " for order #{$locked->order_id}" : '')
+                    . ($locked->reason ? " — {$locked->reason}" : ''),
+                'created_by' => $actor?->id,
+            ]);
+
+            AuditLogService::logModelChange($tx, 'cashbox_transaction.created', self::MODULE);
+
+            $locked->fill([
+                'status' => Refund::STATUS_PAID,
+                'paid_by' => $actor?->id,
+                'paid_at' => now(),
+                'cashbox_id' => $lockedCashbox->id,
+                'payment_method_id' => $paymentMethod->id,
+                'cashbox_transaction_id' => $tx->id,
+            ])->save();
+
+            AuditLogService::log(
+                action: 'refund_paid',
+                module: self::MODULE,
+                recordType: Refund::class,
+                recordId: $locked->id,
+                oldValues: ['status' => Refund::STATUS_APPROVED],
+                newValues: [
+                    'status' => Refund::STATUS_PAID,
+                    'paid_by' => $actor?->id,
+                    'paid_at' => $locked->paid_at?->toDateTimeString(),
+                    'cashbox_id' => $lockedCashbox->id,
+                    'payment_method_id' => $paymentMethod->id,
+                    'cashbox_transaction_id' => $tx->id,
+                    'amount' => (string) $locked->amount,
+                ],
+            );
+
+            return $locked->fresh(['cashbox', 'paymentMethod', 'cashboxTransaction', 'paidBy']);
         });
     }
 
