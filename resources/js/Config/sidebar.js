@@ -122,6 +122,7 @@ export const sidebarSections = [
         title: 'Finance Operations',
         icon: I.cash,
         items: [
+            { label: 'Cashboxes', href: '/cashboxes', icon: I.cash, permission: 'cashboxes.view' },
             { label: 'Expenses', href: '/expenses', icon: I.cash, permission: 'expenses.view' },
             { label: 'Collections', href: '/collections', icon: I.cash, permission: 'collections.view' },
         ],

@@ -105,6 +105,16 @@ class PermissionsSeeder extends Seeder
                 'expenses.delete' => 'Delete expense',
                 'expenses.export' => 'Export expenses',
             ],
+            // Finance Phase 1 — cashboxes foundation. Later phases extend
+            // this module with: payment_methods, cashbox_transfers, refunds.
+            'cashboxes' => [
+                'cashboxes.view' => 'View cashboxes and balances',
+                'cashboxes.create' => 'Create cashbox',
+                'cashboxes.edit' => 'Edit cashbox',
+                'cashboxes.deactivate' => 'Deactivate / reactivate cashbox',
+                'cashbox_transactions.view' => 'View cashbox statement',
+                'cashbox_transactions.create' => 'Record manual cashbox adjustment',
+            ],
             'ads' => [
                 'ads.view' => 'View ads campaigns',
                 'ads.create' => 'Create ads campaign',

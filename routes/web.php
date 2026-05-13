@@ -14,6 +14,7 @@ use App\Http\Controllers\CollectionsController;
 use App\Http\Controllers\CustomersController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExpenseCategoriesController;
+use App\Http\Controllers\CashboxesController;
 use App\Http\Controllers\ExpensesController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\MarketerPortalController;
@@ -325,6 +326,17 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:expenses.edit')->get('/expenses/{expense}/edit', [ExpensesController::class, 'edit'])->name('expenses.edit');
     Route::middleware(['permission:expenses.edit', 'fiscal_year_lock'])->put('/expenses/{expense}', [ExpensesController::class, 'update'])->name('expenses.update');
     Route::middleware(['permission:expenses.delete', 'fiscal_year_lock'])->delete('/expenses/{expense}', [ExpensesController::class, 'destroy'])->name('expenses.destroy');
+
+    /* ─────────────── Cashboxes (Finance Phase 1) ─────────────── */
+    Route::middleware('permission:cashboxes.view')->get('/cashboxes', [CashboxesController::class, 'index'])->name('cashboxes.index');
+    Route::middleware('permission:cashboxes.create')->get('/cashboxes/create', [CashboxesController::class, 'create'])->name('cashboxes.create');
+    Route::middleware('permission:cashboxes.create')->post('/cashboxes', [CashboxesController::class, 'store'])->name('cashboxes.store');
+    Route::middleware('permission:cashboxes.view,cashbox_transactions.view')->get('/cashboxes/{cashbox}', [CashboxesController::class, 'show'])->name('cashboxes.show');
+    Route::middleware('permission:cashboxes.edit')->get('/cashboxes/{cashbox}/edit', [CashboxesController::class, 'edit'])->name('cashboxes.edit');
+    Route::middleware('permission:cashboxes.edit')->put('/cashboxes/{cashbox}', [CashboxesController::class, 'update'])->name('cashboxes.update');
+    Route::middleware('permission:cashboxes.deactivate')->post('/cashboxes/{cashbox}/deactivate', [CashboxesController::class, 'deactivate'])->name('cashboxes.deactivate');
+    Route::middleware('permission:cashboxes.deactivate')->post('/cashboxes/{cashbox}/reactivate', [CashboxesController::class, 'reactivate'])->name('cashboxes.reactivate');
+    Route::middleware('permission:cashbox_transactions.create')->post('/cashboxes/{cashbox}/transactions', [CashboxesController::class, 'storeTransaction'])->name('cashboxes.transactions.store');
 
     Route::middleware('permission:expenses.view')->get('/expense-categories', [ExpenseCategoriesController::class, 'index'])->name('expense-categories.index');
     Route::middleware('permission:expenses.edit')->post('/expense-categories', [ExpenseCategoriesController::class, 'store'])->name('expense-categories.store');

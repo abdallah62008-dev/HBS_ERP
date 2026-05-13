@@ -81,6 +81,8 @@ class RolesSeeder extends Seeder
             'audit_logs.view',
             // Tickets — full management for ops oversight (Phase 7).
             'tickets.view', 'tickets.create', 'tickets.edit', 'tickets.delete', 'tickets.manage',
+            // Finance Phase 1 — managers see cashboxes and statements but don't mutate.
+            'cashboxes.view', 'cashbox_transactions.view',
         ];
 
         $orderAgent = [
@@ -123,6 +125,10 @@ class RolesSeeder extends Seeder
             'reports.view', 'reports.sales', 'reports.profit', 'reports.cash_flow',
             'reports.marketers', 'reports.shipping', 'reports.ads',
             'audit_logs.view',
+            // Finance Phase 1 — accountant is the financial workhorse.
+            // Deactivation reserved for admins per docs/finance Phase 0 matrix.
+            'cashboxes.view', 'cashboxes.create', 'cashboxes.edit',
+            'cashbox_transactions.view', 'cashbox_transactions.create',
         ];
 
         $marketer = [
