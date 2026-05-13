@@ -1,8 +1,9 @@
 # Phase 0 — Finance Architecture Overview
 
-> **Status:** Phase 0 Docs Only. No code, no migrations.
+> **Status:** Originally written before any code shipped. Phases 1 → 5F.1 have since shipped to `main`.
 > **Scope:** Sets the direction for the full HBS_ERP financial roadmap.
 > **Audience:** Engineering, operations, and business stakeholders.
+> **For the as-shipped picture** see [`FINANCE_MODULE_FINAL_OVERVIEW.md`](FINANCE_MODULE_FINAL_OVERVIEW.md) and [`RELEASE_NOTES.md`](RELEASE_NOTES.md). Where this doc diverges from the implementation, those documents take precedence.
 
 ---
 
@@ -98,7 +99,7 @@ These principles apply to every phase of the roadmap. Every PR, review, and feat
 5. **Refund is separate from Return.** Return = goods state machine (existing). Refund = money state machine (new). They are linked by `refund.order_return_id` but follow independent lifecycles. A return can have 0, 1, or N refunds.
 6. **Courier COD is *pending* until settlement.** Delivering an order with payment method = "Courier COD" does **not** immediately credit any cashbox. The collection enters `Pending Settlement` state. Only when the courier remits is a cashbox transaction written (one per collection settled, linked to the settlement batch).
 7. **Marketplace wallets are cashboxes.** Amazon Wallet and Noon Wallet are modelled as cashboxes of `type='marketplace'`. Marketplace sales credit them at delivery / settlement-per-marketplace-rules. Marketplace fees are out-transactions or expenses on the marketplace cashbox. Marketplace payouts to bank are `cashbox_transfers`.
-8. **Closed fiscal periods are locked.** Once a fiscal year is `Closed`, no financial transaction whose `occurred_at` falls inside it may be written, edited, or reversed. This mirrors the existing `OrderService` fiscal-year guard.
+8. **Closed finance periods are locked.** Once a finance period is `closed`, no financial transaction whose `occurred_at` falls inside it may be written. Implemented in Phase 5F as `FinancePeriodService::assertDateIsOpen()` + `finance_periods` table. The older `fiscal_years` annual-scope table still exists for accounting boundary tracking; the closed-period guard runs against `finance_periods`, not `fiscal_years`.
 
 ---
 

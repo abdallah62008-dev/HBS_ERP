@@ -2,11 +2,23 @@
 
 > **Project:** HBS_ERP (Hnawbas Operations System)
 > **Folder:** `docs/finance/`
-> **Current status:** **Phase 0 — Docs Only.** No application code, migrations, models, or seeders have been changed by this phase.
+> **Current status:** **Phases 0 → 5F.1 shipped to `main`. Phase 5G (docs + QA) in progress.**
 
-This folder contains the agreed-upon plan for evolving HBS_ERP from "money lives in row snapshots" to a working **Hybrid Lightweight ERP Finance** model.
+This folder contains both the original planning (Phase 0) for evolving HBS_ERP from "money lives in row snapshots" to a working **Hybrid Lightweight ERP Finance** model, AND the as-built current-state references.
 
-The plan is intentionally additive, phased, and reversible. Every phase below is independently committable, testable, and shippable.
+The plan was intentionally additive, phased, and reversible. The actual implementation diverged from the original phase numbering — see `RELEASE_NOTES.md` for the as-shipped breakdown.
+
+## Authoritative current-state references
+
+If you only have time for one document, read these in order:
+
+| Document | When to read |
+|---|---|
+| [FINANCE_MODULE_FINAL_OVERVIEW.md](FINANCE_MODULE_FINAL_OVERVIEW.md) | First. Current architecture, models, services, permissions, workflows. |
+| [RELEASE_NOTES.md](RELEASE_NOTES.md) | Second. What shipped in each phase, with commit hashes + user impact. |
+| [QA_CHECKLIST.md](QA_CHECKLIST.md) | Before a release. Nine user journeys covering the entire module. |
+
+The Phase 0 documents below are the **planning era** record and are kept for historical context. Where they diverge from the as-shipped implementation, the three documents above take precedence.
 
 ---
 
@@ -24,22 +36,37 @@ The plan is intentionally additive, phased, and reversible. Every phase below is
 
 ---
 
-## Roadmap summary
+## Roadmap summary — AS SHIPPED
 
-| Phase | Title | Headline deliverable |
-|---|---|---|
-| **0** | Documentation and Architecture | These docs (current phase) |
-| **1** | Cashboxes Foundation | `cashboxes` + `cashbox_transactions` tables, statements, balances |
-| **2** | Payment Methods + Transfers | Seeded 7 methods, `cashbox_transfers` table, transfer UI |
-| **3** | Collections Integration | Collections linked to cashboxes; courier-COD settlement reconciliation |
-| **4** | Expenses Integration | Expenses paid from a specific cashbox |
-| **5** | Returns / Refunds Financial Handling | `refunds` table, lifecycle, over-refund guard |
-| **6** | Marketer Payouts + Profit Reversal | Return reverses marketer profit; payouts from cashboxes |
-| **7** | Finance Reports + Dashboard | Cashbox balances, statements, COD pending, refund impact |
-| **8** | Fiscal Controls | Closed-period lock for all financial transactions |
-| **9** | Order Price Override | Audited, approved, refund-aware price override |
+| Phase | Title | Headline deliverable | Status |
+|---|---|---|---|
+| **0** | Documentation and Architecture | These docs | ✅ shipped |
+| **1** | Cashboxes Foundation | `cashboxes` + `cashbox_transactions` tables, statements, balances | ✅ shipped |
+| **2** | Payment Methods + Transfers | Seeded methods, `cashbox_transfers` table, transfer UI | ✅ shipped |
+| **3** | Collections Integration | Collections linked to cashboxes; courier-COD settlement reconciliation | ✅ shipped |
+| **4** | Expenses Integration | Expenses paid from a specific cashbox | ✅ shipped |
+| **4.5** | Cashbox Hardening & Immutability | Append-only `booted` hooks, lock-for-update on posting transactions | ✅ shipped |
+| **5A** | Refunds Foundation | `refunds` table, paperwork lifecycle (requested → approved/rejected), over-refund guard | ✅ shipped |
+| **5B** | Refund Payment + Cashbox OUT | `pay()` writes a cashbox OUT with `source_type='refund'` | ✅ shipped |
+| **5C** | Returns Financial Handling | Refund request linked to `order_return_id`; over-return guard | ✅ shipped |
+| **5D** | Marketer Payouts / Profit Reversal | `marketer_payouts` workflow + cashbox mirror + idempotent refund-driven profit reversal | ✅ shipped |
+| **5E** | Finance Reports | 9 read-only cashbox-domain reports | ✅ shipped |
+| **5F** | Finance Controls / Period Close | `finance_periods` + closed-period guard wired into all cash-impacting services | ✅ shipped |
+| **5F.1** | Cashbox UX Fix | Surface cashbox guard errors as flash instead of 500 | ✅ shipped |
+| **5G** | Documentation + Manual QA | This phase — refresh planning docs, add release notes + final overview + QA checklist | 🟡 in progress |
+| **6+** | Order Price Override (and other follow-ups) | Audited, approved, refund-aware price override | ⬜ not started |
 
-Phases 1 and 2 are sequential. Phases 3 and 4 can be parallelised. Phases 5 → 6 → 7 → 8 → 9 are sequential.
+### Divergence from original plan
+
+The original Phase 0 plan listed Phase 5 as a single "Refunds Financial Handling" phase and reserved Phase 8 for "Fiscal Controls" via a `FiscalYearGuard`. In practice:
+
+- Phase 5 split into 5A–5F.1 (six sub-phases) because each shipped independently with its own commit + tests.
+- Phase 8 "Fiscal Controls" landed as Phase 5F with a different name: **`FinancePeriodService`** + `finance_periods` table. The older `fiscal_years` annual table still exists for annual scope but is **not** what the closed-period guard checks against.
+- Phase 6 "Marketer Payouts" landed as Phase 5D.
+- Phase 7 "Finance Reports + Dashboard" reports landed as Phase 5E; the dashboard portion was already shipped in earlier Dashboard work (Phases 1–2 of the Dashboard track, separate from Finance).
+- Phase 9 "Order Price Override" remains deferred.
+
+See [RELEASE_NOTES.md](RELEASE_NOTES.md) for commit-by-commit detail.
 
 ---
 
@@ -66,19 +93,24 @@ Phases 1 and 2 are sequential. Phases 3 and 4 can be parallelised. Phases 5 → 
 
 ---
 
-## Status board (update as phases land)
+## Status board
 
-| Phase | Status |
-|---|---|
-| 0 — Docs | ✅ This folder |
-| 1 — Cashboxes Foundation | ⬜ Not started |
-| 2 — Payment Methods + Transfers | ⬜ Not started |
-| 3 — Collections Integration | ⬜ Not started |
-| 4 — Expenses Integration | ⬜ Not started |
-| 5 — Refunds | ⬜ Not started |
-| 6 — Marketer Payouts + Reversal | ⬜ Not started |
-| 7 — Finance Reports + Dashboard | ⬜ Not started |
-| 8 — Fiscal Controls | ⬜ Not started |
-| 9 — Order Price Override | ⬜ Not started |
+| Phase | Status | Commit |
+|---|---|---|
+| 0 — Docs | ✅ shipped | (this folder) |
+| 1 — Cashboxes Foundation | ✅ shipped | (initial cashboxes commit) |
+| 2 — Payment Methods + Transfers | ✅ shipped | `819223a` |
+| 3 — Collections Integration | ✅ shipped | `0a93d77` |
+| 4 — Expenses Integration | ✅ shipped | `c0c8f20` |
+| 4.5 — Cashbox Hardening | ✅ shipped | `b303a06` |
+| 5A — Refunds Foundation | ✅ shipped | `e84f487` |
+| 5B — Refund Payment | ✅ shipped | `5467edf` |
+| 5C — Returns Financial Handling | ✅ shipped | `bdc68b3` |
+| 5D — Marketer Payouts / Reversal | ✅ shipped | `73920c0` |
+| 5E — Finance Reports | ✅ shipped | `888087d` |
+| 5F — Period Close | ✅ shipped | `8379334` |
+| 5F.1 — Cashbox UX Fix | ✅ shipped | `9137251` |
+| 5G — Docs + QA | 🟡 in progress | (this commit) |
+| 6+ — Order Price Override | ⬜ not started | — |
 
-> Update this table at the end of each phase's commit message author's review, alongside the actual commit hash.
+> Status board reflects what is on `main` at the time of the 5G commit.

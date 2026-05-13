@@ -1,7 +1,9 @@
-# Phase 0 — Implementation Sequence
+# Phase 0 — Implementation Sequence (Planning Era)
 
 > **Companion to:** [PHASE_0_FINANCE_ROADMAP.md](PHASE_0_FINANCE_ROADMAP.md)
-> **Purpose:** The exact execution order, validation commands, and commit/push policy for every phase.
+> **Purpose:** The original execution order, validation commands, and commit/push policy for every phase.
+>
+> ⚠️ **This is the planning-era sequence.** The actual implementation diverged. Phase 5 was executed as 5A–5F.1; the closed-period work landed at 5F (not Phase 8) as `FinancePeriodService`. For commit-by-commit detail see [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 
 Each phase below assumes the engineer (or Claude Code instance) is operating on **branch `main`** of the project at `C:\Users\Lam\Downloads\HBS_ERP\APP`, with the working tree clean. The validation commands match the patterns already established in Phases 1 and 2 of the dashboard rollout.
 

@@ -1,9 +1,13 @@
-# Phase 0 — Finance Roadmap
+# Phase 0 — Finance Roadmap (Planning Era)
 
 > **Companion to:** [PHASE_0_FINANCE_ARCHITECTURE_OVERVIEW.md](PHASE_0_FINANCE_ARCHITECTURE_OVERVIEW.md)
 > **Purpose:** The exact phased plan to move HBS_ERP from "money lives in row snapshots" to a working hybrid lightweight ERP finance model.
+>
+> ⚠️ **This is the original planning document. The actual implementation diverged.** Phase 5 split into 5A–5F.1, Phase 6 "Marketer Payouts" became Phase 5D, Phase 7 "Reports" became Phase 5E, Phase 8 "Fiscal Controls / FiscalYearGuard" became Phase 5F as `FinancePeriodService` + `finance_periods`. Phase 9 "Order Price Override" remains deferred.
+>
+> **For the as-shipped phase mapping** see [`RELEASE_NOTES.md`](RELEASE_NOTES.md). For the current-state architecture, see [`FINANCE_MODULE_FINAL_OVERVIEW.md`](FINANCE_MODULE_FINAL_OVERVIEW.md).
 
-Each phase is **independently committable, independently shippable**. None of the phases need to land in the same release window. Phase 0 is documentation only; Phases 1–9 deliver code.
+Each phase below was **independently committable, independently shippable**. None of the phases needed to land in the same release window. Phase 0 was documentation only; Phases 1–9 in the original plan deliver code (in practice, Phases 1–5F.1 shipped; 6+ remains).
 
 ---
 

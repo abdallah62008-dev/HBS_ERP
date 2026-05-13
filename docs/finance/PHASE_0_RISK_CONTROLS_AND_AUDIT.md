@@ -2,6 +2,8 @@
 
 > **Companion to:** [PHASE_0_FINANCIAL_BUSINESS_RULES.md](PHASE_0_FINANCIAL_BUSINESS_RULES.md)
 > **Purpose:** The risks the finance roadmap must defend against, the controls in place to defend against them, and the audit obligations per phase.
+>
+> ⚠️ Some "(Phase N)" references below predate the as-shipped phase numbering. R-11 in particular landed at Phase 5F as `FinancePeriodService` (not Phase 8 as `FiscalYearGuard`). See [`FINANCE_MODULE_FINAL_OVERVIEW.md`](FINANCE_MODULE_FINAL_OVERVIEW.md) for the as-shipped control mapping.
 
 This document is the single source of truth for "what could go wrong" and "what stops it." Every PR in the finance roadmap should reference one or more rows from §1 in its description.
 
@@ -21,7 +23,8 @@ This document is the single source of truth for "what could go wrong" and "what 
 | R-08 | **Marketer profit not reversed after return** | Confirmed today | Medium | `MarketerWalletService::syncFromOrder()` extended to handle `Returned` → writes `Cancelled Profit` row (Phase 6). Audited. |
 | R-09 | **User permission leaks** | Medium | High | Every new finance prop is server-gated. Phase 1 dashboard pattern (see existing `permissions.orders_view` gating) extended to every finance metric. Frontend hiding is belt-and-braces only. |
 | R-10 | **Manual adjustment abuse** | Low | High | `cashbox_transactions.create` is its own permission. `source_type='adjustment'` requires `notes`. Every adjustment writes audit log. UI surfaces adjustments distinctly in statements. |
-| R-11 | **Editing closed fiscal periods** | Low | High | `FiscalYearGuard` helper (Phase 8) refuses any financial write with `occurred_at` inside a closed fiscal year. Tested. |
+| R-11 | **Editing closed finance periods** | Low | High | **As shipped:** `FinancePeriodService::assertDateIsOpen()` (Phase 5F) refuses any financial write with `occurred_at` inside a closed `finance_periods` row. Applied to all 6 cash-impacting services. Tested. The older `fiscal_years` table still tracks annual scope but is not the table the guard checks against. |
+| R-19 | **Refund-then-return double-reversal of marketer profit** | Medium | Medium | **As shipped (Phase 5D):** `MarketerProfitReversalService` skips reversal when (a) the refund is linked to an `order_return_id`, or (b) the order's status is already `Returned`/`Cancelled`. Prevents stacking the proportional refund reversal on top of the `syncFromOrder` order-status-driven reversal. Tested in `MarketerPayoutTest`. |
 | R-12 | **Price override after refund** | Medium (sales pressure) | High | `OrderService` override path checks for `refunds.status='Paid'` and rejects (Phase 9). Tested. |
 | R-13 | **Cross-currency contamination** | Low (single currency today) | Medium | Service-layer guard: cashbox transaction's source must match cashbox's `currency_code`. Cross-currency transfers explicitly rejected. |
 | R-14 | **Partial state on failure** | Medium | High | Every multi-row financial write is wrapped in `DB::transaction()`. Tested in service-layer specs. |
