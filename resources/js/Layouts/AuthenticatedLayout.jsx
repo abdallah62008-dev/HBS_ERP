@@ -20,6 +20,61 @@ export default function AuthenticatedLayout({ header, children }) {
     const [mobileOpen, setMobileOpen] = useState(false);
     const [bell, setBell] = useState({ unread_count: 0, recent: [] });
 
+    /* ============================================================== */
+    /* Sidebar — persistent collapse with per-group flyout.            */
+    /*                                                                 */
+    /* `sidebarCollapsed` is the persistent preference (localStorage). */
+    /* When collapsed, SidebarNav renders ONE icon per group and       */
+    /* manages its own flyout panel internally. The layout here just  */
+    /* needs to size the rail (w-20) and pin main content padding so  */
+    /* opening a flyout never reflows the page.                        */
+    /*                                                                 */
+    /* `isMobile` is tracked so the mobile drawer always shows the    */
+    /* full labelled sidebar regardless of the desktop preference.    */
+    /* ============================================================== */
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [isMobile, setIsMobile] = useState(false);
+
+    // Restore persistent collapse from localStorage after mount (SSR-safe).
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            const stored = window.localStorage.getItem('sidebar:collapsed');
+            if (stored === '1') setSidebarCollapsed(true);
+        } catch { /* localStorage may be disabled (private mode etc.) */ }
+    }, []);
+
+    // Track viewport so the mobile drawer always shows the full labelled
+    // sidebar regardless of the desktop collapse preference.
+    useEffect(() => {
+        if (typeof window === 'undefined' || !window.matchMedia) return;
+        const mq = window.matchMedia('(max-width: 767px)');
+        const update = (e) => setIsMobile(e.matches);
+        update(mq);
+        if (mq.addEventListener) {
+            mq.addEventListener('change', update);
+            return () => mq.removeEventListener('change', update);
+        }
+        // Safari < 14 fallback
+        mq.addListener(update);
+        return () => mq.removeListener(update);
+    }, []);
+
+    const toggleSidebar = () => {
+        setSidebarCollapsed((prev) => {
+            const next = !prev;
+            try {
+                window.localStorage.setItem('sidebar:collapsed', next ? '1' : '0');
+            } catch { /* ignore */ }
+            return next;
+        });
+    };
+
+    // Mobile always sees the full labelled drawer; on desktop, follow the
+    // persistent preference. SidebarNav itself owns flyout state in
+    // compact mode.
+    const showLabels = isMobile || !sidebarCollapsed;
+
     // Poll the notifications summary every 60s. Cheap query — one COUNT
     // and a 8-row LIMIT — per 60s for active users only.
     useEffect(() => {
@@ -41,33 +96,81 @@ export default function AuthenticatedLayout({ header, children }) {
             {/* Sidebar */}
             <aside
                 className={
-                    'fixed inset-y-0 left-0 z-30 flex w-64 flex-col bg-slate-900 text-slate-100 transition-transform md:translate-x-0 ' +
+                    'fixed inset-y-0 left-0 z-30 flex flex-col bg-slate-900 text-slate-100 ' +
+                    'transition-[width,transform] duration-150 motion-reduce:transition-none ' +
+                    'md:translate-x-0 ' +
+                    // Mobile baseline is always w-64 (full labelled drawer).
+                    // On md+, narrow to w-20 when persistently collapsed.
+                    // Children of the collapsed rail render group icons
+                    // only; per-group flyouts are owned by SidebarNav.
+                    'w-64 ' +
+                    (!isMobile && sidebarCollapsed ? 'md:w-20 ' : '') +
                     (mobileOpen ? 'translate-x-0' : '-translate-x-full')
                 }
             >
-                <div className="flex items-center gap-3 border-b border-slate-800 px-5 py-4">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-md bg-indigo-500 font-bold text-white">
-                        H
-                    </div>
-                    <div className="leading-tight">
-                        <div className="text-sm font-semibold text-white">{appName}</div>
-                        <div className="text-[11px] text-slate-400">E-commerce Operations</div>
-                    </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto">
-                    <SidebarNav />
-                </div>
-
-                <div className="border-t border-slate-800 px-4 py-3 text-xs text-slate-400">
-                    {user?.role?.name && (
-                        <div className="truncate">
-                            <span className="text-slate-500">Role:</span>{' '}
-                            <span className="text-slate-200">{user.role.name}</span>
+                <div
+                    className={
+                        'flex border-b border-slate-800 ' +
+                        (showLabels
+                            ? 'flex-row items-center justify-between gap-3 px-5 py-4'
+                            : 'flex-col items-center gap-2 px-2 py-3')
+                    }
+                >
+                    <div className={'flex items-center ' + (showLabels ? 'gap-3 min-w-0' : '')}>
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-indigo-500 font-bold text-white">
+                            H
                         </div>
-                    )}
-                    <div className="truncate">v0.1 — Phase 1</div>
+                        {showLabels && (
+                            <div className="leading-tight min-w-0">
+                                <div className="truncate text-sm font-semibold text-white">{appName}</div>
+                                <div className="text-[11px] text-slate-400">E-commerce Operations</div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Collapse toggle — desktop only. Mobile keeps the drawer-style hamburger. */}
+                    {/* The icon reflects the PERSISTENT preference, not the hover state, so the */}
+                    {/* user always sees what their next click will do. */}
+                    <button
+                        type="button"
+                        onClick={toggleSidebar}
+                        aria-pressed={sidebarCollapsed}
+                        aria-label={sidebarCollapsed ? 'Expand sidebar permanently' : 'Collapse sidebar'}
+                        title={sidebarCollapsed ? 'Expand sidebar permanently' : 'Collapse sidebar'}
+                        className="hidden md:inline-flex shrink-0 items-center justify-center rounded-md p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            strokeWidth={1.8}
+                            stroke="currentColor"
+                            className={'h-4 w-4 transition-transform ' + (sidebarCollapsed ? 'rotate-180' : '')}
+                        >
+                            <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M18.75 19.5 11.25 12l7.5-7.5m-7.5 15L3.75 12l7.5-7.5"
+                            />
+                        </svg>
+                    </button>
                 </div>
+
+                <div className="flex-1 overflow-y-auto overflow-x-hidden">
+                    <SidebarNav showLabels={showLabels} />
+                </div>
+
+                {showLabels && (
+                    <div className="border-t border-slate-800 px-4 py-3 text-xs text-slate-400">
+                        {user?.role?.name && (
+                            <div className="truncate">
+                                <span className="text-slate-500">Role:</span>{' '}
+                                <span className="text-slate-200">{user.role.name}</span>
+                            </div>
+                        )}
+                        <div className="truncate">v0.1 — Phase 1</div>
+                    </div>
+                )}
             </aside>
 
             {/* Mobile backdrop */}
@@ -79,7 +182,12 @@ export default function AuthenticatedLayout({ header, children }) {
             )}
 
             {/* Main column */}
-            <div className="flex min-h-screen flex-col md:pl-64">
+            <div
+                className={
+                    'flex min-h-screen flex-col transition-[padding] duration-200 ' +
+                    (sidebarCollapsed ? 'md:pl-20' : 'md:pl-64')
+                }
+            >
                 <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4">
                     <div className="flex items-center gap-3">
                         <button
