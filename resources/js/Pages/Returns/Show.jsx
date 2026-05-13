@@ -26,7 +26,7 @@ function refundStatusChip(status) {
     );
 }
 
-export default function ReturnShow({ return: ret, reasons, refund_context }) {
+export default function ReturnShow({ return: ret, reasons, refund_context, order_context, edit_context }) {
     const can = useCan();
 
     const inspect = useForm({
@@ -41,6 +41,15 @@ export default function ReturnShow({ return: ret, reasons, refund_context }) {
         reason: `Refund from return #${ret.id}`,
     });
 
+    // Professional Return Management — limited details edit form.
+    // Only refund_amount, shipping_loss_amount, notes are mutable
+    // post-creation. State-machine fields are NOT editable here.
+    const editDetails = useForm({
+        refund_amount: ret.refund_amount,
+        shipping_loss_amount: ret.shipping_loss_amount ?? 0,
+        notes: ret.notes ?? '',
+    });
+
     const submitInspect = (e) => {
         e.preventDefault();
         inspect.post(route('returns.inspect', ret.id));
@@ -51,8 +60,13 @@ export default function ReturnShow({ return: ret, reasons, refund_context }) {
         requestRefund.post(route('returns.request-refund', ret.id));
     };
 
+    const submitEditDetails = (e) => {
+        e.preventDefault();
+        editDetails.put(route('returns.update', ret.id), { preserveScroll: true });
+    };
+
     const closeReturn = () => {
-        if (!confirm('Close this return?')) return;
+        if (!confirm('Close this return? Closed returns cannot be edited.')) return;
         router.post(route('returns.close', ret.id));
     };
 
@@ -70,6 +84,35 @@ export default function ReturnShow({ return: ret, reasons, refund_context }) {
                 <StatusBadge value={ret.product_condition} />
                 <span className="text-xs text-slate-500">Reason: {ret.return_reason?.name}</span>
             </div>
+
+            {/* Professional Return Management — Order Summary card. Always
+                surfaces the linked order's status so operators can spot a
+                mismatch (e.g. a legacy return whose order is still in
+                Shipped). The amber warning fires only when the mismatch
+                is real (i.e. not during the legitimate Pending mid-flow
+                state). */}
+            {order_context && (
+                <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Linked order</div>
+                        <Link href={route('orders.show', order_context.id)} className="font-mono text-sm text-indigo-600 hover:underline">
+                            {order_context.order_number}
+                        </Link>
+                        <StatusBadge value={order_context.status} />
+                        <span className="text-sm text-slate-700">{order_context.customer_name}</span>
+                        {order_context.customer_phone && (
+                            <span className="text-xs text-slate-500">· {order_context.customer_phone}</span>
+                        )}
+                    </div>
+                    {order_context.mismatch && (
+                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                            This return exists, but the linked order status is still
+                            <strong className="mx-1">"{order_context.status}"</strong>.
+                            Consider changing the order status to <strong>Returned</strong> from the order page so inventory and audit history stay aligned.
+                        </div>
+                    )}
+                </div>
+            )}
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <div className="lg:col-span-2 rounded-lg border border-slate-200 bg-white p-5 space-y-3">
@@ -117,6 +160,84 @@ export default function ReturnShow({ return: ret, reasons, refund_context }) {
                         <button onClick={closeReturn} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50">
                             Close return
                         </button>
+                    )}
+
+                    {/* Professional Return Management — limited details edit.
+                        Lifecycle state (return_status, product_condition,
+                        restockable) is NEVER editable here — those mutate
+                        only via inspect/close. refund_amount cannot drop
+                        below the cumulative active linked refunds. */}
+                    {can('returns.create') && edit_context?.can_edit && (
+                        <form onSubmit={submitEditDetails} className="rounded-lg border border-slate-200 bg-white p-5 space-y-3">
+                            <h2 className="text-sm font-semibold text-slate-700">Edit details</h2>
+                            <p className="text-[11px] text-slate-500">
+                                Only refund amount, shipping loss, and notes can be edited here.
+                                Status, condition, and restockable are managed by Inspect / Close.
+                            </p>
+
+                            <label className="block text-xs font-medium text-slate-600">
+                                Refund amount
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    min={edit_context?.min_refund_amount ?? 0}
+                                    value={editDetails.data.refund_amount}
+                                    onChange={(e) => editDetails.setData('refund_amount', e.target.value)}
+                                    className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                />
+                                {edit_context?.active_refund_total > 0 && (
+                                    <p className="mt-1 text-[11px] text-slate-500">
+                                        Cannot reduce below {fmtAmount(edit_context.active_refund_total)} (active linked refunds).
+                                    </p>
+                                )}
+                                {editDetails.errors.refund_amount && (
+                                    <p className="mt-1 text-xs text-rose-600">{editDetails.errors.refund_amount}</p>
+                                )}
+                            </label>
+
+                            <label className="block text-xs font-medium text-slate-600">
+                                Shipping loss
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    min={0}
+                                    value={editDetails.data.shipping_loss_amount}
+                                    onChange={(e) => editDetails.setData('shipping_loss_amount', e.target.value)}
+                                    className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                />
+                                {editDetails.errors.shipping_loss_amount && (
+                                    <p className="mt-1 text-xs text-rose-600">{editDetails.errors.shipping_loss_amount}</p>
+                                )}
+                            </label>
+
+                            <label className="block text-xs font-medium text-slate-600">
+                                Notes
+                                <textarea
+                                    rows={3}
+                                    value={editDetails.data.notes}
+                                    onChange={(e) => editDetails.setData('notes', e.target.value)}
+                                    placeholder="Free-text notes about the return"
+                                    className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                />
+                                {editDetails.errors.notes && (
+                                    <p className="mt-1 text-xs text-rose-600">{editDetails.errors.notes}</p>
+                                )}
+                            </label>
+
+                            <button
+                                type="submit"
+                                disabled={editDetails.processing}
+                                className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+                            >
+                                {editDetails.processing ? 'Saving…' : 'Save details'}
+                            </button>
+                        </form>
+                    )}
+
+                    {ret.return_status === 'Closed' && (
+                        <p className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-500">
+                            This return is closed. Details are locked.
+                        </p>
                     )}
 
                     <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm">

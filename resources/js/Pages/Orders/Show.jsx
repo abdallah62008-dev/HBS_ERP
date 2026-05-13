@@ -2,8 +2,8 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import StatusBadge from '@/Components/StatusBadge';
 import useCan from '@/Hooks/useCan';
-import { Head, Link, router, usePage } from '@inertiajs/react';
-import { useState } from 'react';
+import { Head, Link, useForm, usePage } from '@inertiajs/react';
+import { useMemo, useState } from 'react';
 
 function fmt(n) {
     if (n === null || n === undefined) return '—';
@@ -19,22 +19,70 @@ function Field({ label, value }) {
     );
 }
 
-export default function OrderShow({ order, statuses }) {
+export default function OrderShow({
+    order,
+    statuses,
+    return_reasons = [],
+    return_conditions = ['Good', 'Damaged', 'Missing Parts', 'Unknown'],
+    can_create_return = false,
+    has_return = false,
+}) {
     const can = useCan();
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
 
     const [statusOpen, setStatusOpen] = useState(false);
-    const [pendingStatus, setPendingStatus] = useState(order.status);
-    const [statusNote, setStatusNote] = useState('');
+
+    // Inertia form so we get inline validation errors on the return.* fields.
+    const form = useForm({
+        status: order.status,
+        note: '',
+        return: {
+            return_reason_id: '',
+            product_condition: 'Unknown',
+            refund_amount: 0,
+            shipping_loss_amount: 0,
+            notes: '',
+        },
+    });
+
+    // Filter the status dropdown:
+    //   - Hide "Returned" when the user lacks returns.create OR the
+    //     order already has a return (the one-return-per-order rule).
+    //   - Everything else stays.
+    const availableStatuses = useMemo(() => {
+        return statuses.filter((s) => {
+            if (s !== 'Returned') return true;
+            return can_create_return && !has_return;
+        });
+    }, [statuses, can_create_return, has_return]);
+
+    const isReturning = form.data.status === 'Returned';
 
     const submitStatus = (e) => {
         e.preventDefault();
-        router.post(
-            route('orders.change-status', order.id),
-            { status: pendingStatus, note: statusNote },
-            { onSuccess: () => { setStatusOpen(false); setStatusNote(''); } },
-        );
+        // Backend uses `required_if:status,Returned` to validate the
+        // return payload, so we send it as-is. For non-Returned status
+        // the controller ignores the `return` array.
+        form.post(route('orders.change-status', order.id), {
+            preserveScroll: true,
+            onSuccess: () => {
+                setStatusOpen(false);
+                form.reset('note');
+                form.setData('return', {
+                    return_reason_id: '',
+                    product_condition: 'Unknown',
+                    refund_amount: 0,
+                    shipping_loss_amount: 0,
+                    notes: '',
+                });
+            },
+        });
+    };
+
+    const openStatusModal = () => {
+        form.setData('status', order.status);
+        setStatusOpen(true);
     };
 
     return (
@@ -55,7 +103,7 @@ export default function OrderShow({ order, statuses }) {
                             </Link>
                         )}
                         {can('orders.change_status') && (
-                            <button onClick={() => setStatusOpen(true)} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
+                            <button onClick={openStatusModal} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
                                 Change status
                             </button>
                         )}
@@ -189,25 +237,130 @@ export default function OrderShow({ order, statuses }) {
             {/* Status modal */}
             {statusOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-                    <form onSubmit={submitStatus} className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+                    <form onSubmit={submitStatus} className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl max-h-[90vh] overflow-y-auto">
                         <h3 className="mb-3 text-sm font-semibold text-slate-800">Change order status</h3>
-                        <select
-                            value={pendingStatus}
-                            onChange={(e) => setPendingStatus(e.target.value)}
-                            className="block w-full rounded-md border-slate-300 text-sm"
-                        >
-                            {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                        <textarea
-                            value={statusNote}
-                            onChange={(e) => setStatusNote(e.target.value)}
-                            placeholder="Optional note for the status history"
-                            rows={2}
-                            className="mt-3 block w-full rounded-md border-slate-300 text-sm"
-                        />
+
+                        <label className="block text-xs font-medium text-slate-600">
+                            Status
+                            <select
+                                value={form.data.status}
+                                onChange={(e) => form.setData('status', e.target.value)}
+                                className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                            >
+                                {availableStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                            {form.errors.status && <p className="mt-1 text-xs text-rose-600">{form.errors.status}</p>}
+                        </label>
+
+                        <label className="mt-3 block text-xs font-medium text-slate-600">
+                            Status note <span className="font-normal text-slate-400">(optional, history record)</span>
+                            <textarea
+                                value={form.data.note}
+                                onChange={(e) => form.setData('note', e.target.value)}
+                                placeholder="Optional note for the status history"
+                                rows={2}
+                                className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                            />
+                            {form.errors.note && <p className="mt-1 text-xs text-rose-600">{form.errors.note}</p>}
+                        </label>
+
+                        {/* Return details — surfaced only when target status is Returned. */}
+                        {isReturning && (
+                            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 space-y-3">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                                    Return details
+                                </div>
+                                <p className="text-[11px] text-amber-700">
+                                    A return record will be created automatically when you save. After saving you'll land on the return page so you can record the inspection.
+                                </p>
+
+                                <label className="block text-xs font-medium text-slate-700">
+                                    Return reason <span className="text-rose-600">*</span>
+                                    <select
+                                        value={form.data.return.return_reason_id}
+                                        onChange={(e) => form.setData('return', { ...form.data.return, return_reason_id: e.target.value })}
+                                        className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                    >
+                                        <option value="">— select a reason —</option>
+                                        {return_reasons.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                    </select>
+                                    {form.errors['return.return_reason_id'] && (
+                                        <p className="mt-1 text-xs text-rose-600">{form.errors['return.return_reason_id']}</p>
+                                    )}
+                                </label>
+
+                                <label className="block text-xs font-medium text-slate-700">
+                                    Product condition
+                                    <select
+                                        value={form.data.return.product_condition}
+                                        onChange={(e) => form.setData('return', { ...form.data.return, product_condition: e.target.value })}
+                                        className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                    >
+                                        {return_conditions.map((c) => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                    {form.errors['return.product_condition'] && (
+                                        <p className="mt-1 text-xs text-rose-600">{form.errors['return.product_condition']}</p>
+                                    )}
+                                </label>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                    <label className="block text-xs font-medium text-slate-700">
+                                        Refund amount {sym && <span className="text-slate-400">({sym})</span>}
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0"
+                                            value={form.data.return.refund_amount}
+                                            onChange={(e) => form.setData('return', { ...form.data.return, refund_amount: e.target.value })}
+                                            className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                        />
+                                        {form.errors['return.refund_amount'] && (
+                                            <p className="mt-1 text-xs text-rose-600">{form.errors['return.refund_amount']}</p>
+                                        )}
+                                    </label>
+                                    <label className="block text-xs font-medium text-slate-700">
+                                        Shipping loss {sym && <span className="text-slate-400">({sym})</span>}
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0"
+                                            value={form.data.return.shipping_loss_amount}
+                                            onChange={(e) => form.setData('return', { ...form.data.return, shipping_loss_amount: e.target.value })}
+                                            className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                        />
+                                        {form.errors['return.shipping_loss_amount'] && (
+                                            <p className="mt-1 text-xs text-rose-600">{form.errors['return.shipping_loss_amount']}</p>
+                                        )}
+                                    </label>
+                                </div>
+
+                                <label className="block text-xs font-medium text-slate-700">
+                                    Return notes
+                                    <textarea
+                                        value={form.data.return.notes}
+                                        onChange={(e) => form.setData('return', { ...form.data.return, notes: e.target.value })}
+                                        placeholder="Optional notes for the return record"
+                                        rows={2}
+                                        className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                    />
+                                    {form.errors['return.notes'] && (
+                                        <p className="mt-1 text-xs text-rose-600">{form.errors['return.notes']}</p>
+                                    )}
+                                </label>
+                            </div>
+                        )}
+
+                        {has_return && (
+                            <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-500">
+                                This order already has a return record — the "Returned" status is no longer available from this menu.
+                            </p>
+                        )}
+
                         <div className="mt-4 flex justify-end gap-2">
                             <button type="button" onClick={() => setStatusOpen(false)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">Cancel</button>
-                            <button type="submit" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">Save</button>
+                            <button type="submit" disabled={form.processing} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60">
+                                {form.processing ? 'Saving…' : 'Save'}
+                            </button>
                         </div>
                     </form>
                 </div>

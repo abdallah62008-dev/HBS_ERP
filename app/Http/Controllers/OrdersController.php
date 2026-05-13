@@ -6,22 +6,29 @@ use App\Http\Requests\StoreOrderRequest;
 use App\Http\Requests\UpdateOrderRequest;
 use App\Models\Category;
 use App\Models\Order;
+use App\Models\OrderReturn;
 use App\Models\Product;
+use App\Models\ReturnReason;
 use App\Services\AuditLogService;
 use App\Services\DuplicateDetectionService;
 use App\Services\OrderService;
+use App\Services\OrderStatusFlowService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use InvalidArgumentException;
+use RuntimeException;
 
 class OrdersController extends Controller
 {
     public function __construct(
         private readonly OrderService $orderService,
         private readonly DuplicateDetectionService $duplicateService,
+        private readonly OrderStatusFlowService $statusFlow,
     ) {}
 
     public function index(Request $request): Response
@@ -207,9 +214,23 @@ class OrdersController extends Controller
             'shippedBy:id,name',
         ]);
 
+        // Returns/Refunds UX: surface enough info to the Change Status
+        // modal so the UI can conditionally show "Return details" when
+        // the user picks `Returned`, AND can hide the Returned option
+        // entirely when it isn't valid (no returns.create permission,
+        // or the order already has a return).
+        $hasReturn = $order->returns()->exists();
+        $user = $order->relationLoaded('createdBy') ? request()->user() : request()->user();
+
         return Inertia::render('Orders/Show', [
             'order' => $order,
             'statuses' => Order::STATUSES,
+            'return_reasons' => ReturnReason::where('status', 'Active')
+                ->orderBy('name')
+                ->get(['id', 'name']),
+            'return_conditions' => OrderReturn::CONDITIONS,
+            'can_create_return' => (bool) ($user?->hasPermission('returns.create')),
+            'has_return' => $hasReturn,
         ]);
     }
 
@@ -217,9 +238,23 @@ class OrdersController extends Controller
     {
         $this->authorizeOwnership($order);
 
+        // Professional Return Management — the Edit page mirrors the
+        // Orders/Show Change Status modal: when the operator picks
+        // `Returned`, the Edit form expands a Return Details section
+        // and the update route uses OrderStatusFlowService to create
+        // the linked return atomically. We pass the same props the
+        // Show page uses so the JSX can render identical fields.
+        $hasReturn = $order->returns()->exists();
+
         return Inertia::render('Orders/Edit', [
             'order' => $order,
             'statuses' => Order::STATUSES,
+            'return_reasons' => ReturnReason::where('status', 'Active')
+                ->orderBy('name')
+                ->get(['id', 'name']),
+            'return_conditions' => OrderReturn::CONDITIONS,
+            'can_create_return' => (bool) ($request = request())?->user()?->hasPermission('returns.create'),
+            'has_return' => $hasReturn,
         ]);
     }
 
@@ -227,17 +262,92 @@ class OrdersController extends Controller
     {
         $this->authorizeOwnership($order);
 
+        // Professional Return Management — the Edit form may carry an
+        // optional `return.*` payload alongside the normal order fields.
+        // It's only required when the operator is transitioning INTO
+        // `Returned` from this page (NOT when the order is already
+        // Returned and other fields are being edited). For every other
+        // status the payload is ignored.
+        $extra = $request->validate([
+            'return' => ['nullable', 'array'],
+            'return.return_reason_id' => ['nullable', 'exists:return_reasons,id'],
+            'return.product_condition' => ['nullable', \Illuminate\Validation\Rule::in(OrderReturn::CONDITIONS)],
+            'return.refund_amount' => ['nullable', 'numeric', 'min:0'],
+            'return.shipping_loss_amount' => ['nullable', 'numeric', 'min:0'],
+            'return.notes' => ['nullable', 'string', 'max:2000'],
+        ]);
+
         $data = $request->validated();
         $statusChange = $data['status'] ?? null;
         $statusNote = $data['status_note'] ?? null;
         unset($data['status'], $data['status_note']);
 
-        $order->fill([...$data, 'updated_by' => Auth::id()])->save();
+        $isNewReturned = $statusChange === 'Returned' && $statusChange !== $order->status;
 
-        AuditLogService::logModelChange($order, 'updated', 'orders');
+        // Inline conditional-required check: a return reason is only
+        // required when this is a NEW transition into Returned. We do
+        // this instead of `required_if:status,Returned` because the
+        // latter would falsely fire when an already-Returned order is
+        // being edited for non-status fields.
+        if ($isNewReturned && empty($extra['return']['return_reason_id'] ?? null)) {
+            return back()
+                ->withInput()
+                ->withErrors([
+                    'return.return_reason_id' => 'A return reason is required when changing the order to Returned.',
+                ]);
+        }
 
-        if ($statusChange && $statusChange !== $order->status) {
-            $this->orderService->changeStatus($order->refresh(), $statusChange, $statusNote);
+        // Returned transition requires returns.create permission. Inline
+        // check so a user with `orders.edit` alone cannot create a
+        // return record via the bulk-update path.
+        if ($isNewReturned) {
+            abort_unless(
+                $request->user()?->hasPermission('returns.create'),
+                403,
+                'You do not have permission to create a return record.',
+            );
+        }
+
+        try {
+            $newReturn = DB::transaction(function () use ($order, $data, $statusChange, $statusNote, $extra, $isNewReturned) {
+                // 1. Persist the non-status field edits (address, money
+                //    tweaks, notes) first. If the transaction rolls back
+                //    later, these revert too.
+                $order->fill([...$data, 'updated_by' => Auth::id()])->save();
+                AuditLogService::logModelChange($order, 'updated', 'orders');
+
+                if (! $statusChange || $statusChange === $order->status) {
+                    return null; // No status change — done.
+                }
+
+                if ($isNewReturned) {
+                    // 2a. Use the same atomic flow as Orders/Show modal:
+                    //     creates OrderReturn + flips order.status. The
+                    //     wrapper itself runs `OrderService::changeStatus`
+                    //     which writes inventory return-to-stock and
+                    //     reverses marketer profit.
+                    $result = $this->statusFlow->changeStatus($order->refresh(), [
+                        'status' => 'Returned',
+                        'note' => $statusNote,
+                        'return' => $extra['return'] ?? [],
+                    ]);
+                    return $result['return'] ?? null;
+                }
+
+                // 2b. Non-Returned status transition — legacy path.
+                $this->orderService->changeStatus($order->refresh(), $statusChange, $statusNote);
+                return null;
+            });
+        } catch (InvalidArgumentException|RuntimeException $e) {
+            return back()->withInput()->with('error', $e->getMessage());
+        }
+
+        // Send the operator to the new return's show page when a return
+        // was just created. Otherwise return to the order detail page.
+        if ($newReturn) {
+            return redirect()
+                ->route('returns.show', $newReturn)
+                ->with('success', 'Order returned and return record created.');
         }
 
         return redirect()
@@ -366,6 +476,14 @@ class OrdersController extends Controller
 
     /**
      * Status change endpoint — used by Orders/Show quick-action buttons.
+     *
+     * Returns/Refunds UX: when the target status is `Returned`, the
+     * request also carries a `return` payload (reason, condition,
+     * amounts, notes). The status change AND return creation happen
+     * atomically through `OrderStatusFlowService`. On success the
+     * operator is redirected to the new return's show page so they
+     * can proceed with inspection. For every other status the legacy
+     * behavior is preserved exactly.
      */
     public function changeStatus(Request $request, Order $order): RedirectResponse
     {
@@ -374,15 +492,43 @@ class OrdersController extends Controller
         $data = $request->validate([
             'status' => ['required', 'in:'.implode(',', Order::STATUSES)],
             'note' => ['nullable', 'string', 'max:500'],
+            // Optional return payload. Required keys are gated by
+            // `required_if:status,Returned` below.
+            'return' => ['nullable', 'array'],
+            'return.return_reason_id' => ['required_if:status,Returned', 'exists:return_reasons,id'],
+            'return.product_condition' => ['nullable', Rule::in(OrderReturn::CONDITIONS)],
+            'return.refund_amount' => ['nullable', 'numeric', 'min:0'],
+            'return.shipping_loss_amount' => ['nullable', 'numeric', 'min:0'],
+            'return.notes' => ['nullable', 'string', 'max:2000'],
         ]);
 
+        // Returned status requires a separate permission so a user with
+        // `orders.change_status` alone cannot create return records.
+        if ($data['status'] === 'Returned') {
+            abort_unless(
+                $request->user()?->hasPermission('returns.create'),
+                403,
+                'You do not have permission to create a return record.',
+            );
+        }
+
         try {
-            $this->orderService->changeStatus($order, $data['status'], $data['note'] ?? null);
-        } catch (\RuntimeException $e) {
-            // Domain-rule failures (shipping checklist, profit guard, status
-            // flow) bubble up as RuntimeException. Surface as a flash error
-            // so the modal redirects back instead of 500-ing.
+            $result = $this->statusFlow->changeStatus($order, $data);
+        } catch (InvalidArgumentException|RuntimeException $e) {
+            // Domain-rule failures (shipping checklist, profit guard,
+            // duplicate return, fiscal/period guard) bubble up here.
+            // Surface as a flash error so the modal redirects back
+            // instead of 500-ing. The DB::transaction inside the
+            // service guarantees no partial state.
             return back()->with('error', $e->getMessage());
+        }
+
+        // Returned + return created → send the operator to the new
+        // return's show page where they'll do the inspection next.
+        if ($data['status'] === 'Returned' && ! empty($result['return'])) {
+            return redirect()
+                ->route('returns.show', $result['return'])
+                ->with('success', 'Order returned and return record created.');
         }
 
         return back()->with('success', "Status changed to {$data['status']}.");

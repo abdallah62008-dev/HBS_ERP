@@ -119,6 +119,17 @@ class ReturnsController extends Controller
             ->sum('amount');
         $refundable = max(0.0, (float) $return->refund_amount - $activeRefundsTotal);
 
+        // Professional Return Management: surface order linkage context.
+        // The mismatch warning fires when the linked order's status is
+        // anything other than `Returned` or `Cancelled` AND the return
+        // itself is past the legitimate pre-inspection window. During
+        // `Pending` we don't warn — that's a normal mid-flow state.
+        $orderStatus = $return->order?->status;
+        $statesAccepted = ['Returned', 'Cancelled'];
+        $orderStatusMismatch = $orderStatus
+            && ! in_array($orderStatus, $statesAccepted, true)
+            && $return->return_status !== 'Pending';
+
         return Inertia::render('Returns/Show', [
             'return' => $return,
             'reasons' => ReturnReason::where('status', 'Active')->orderBy('name')->get(['id', 'name']),
@@ -130,7 +141,51 @@ class ReturnsController extends Controller
                 'active_refund_total' => $activeRefundsTotal,
                 'refund_base_amount' => (float) $return->refund_amount,
             ],
+            // Professional Return Management — order linkage + mismatch.
+            'order_context' => [
+                'id' => $return->order?->id,
+                'order_number' => $return->order?->order_number,
+                'status' => $orderStatus,
+                'customer_name' => $return->order?->customer_name,
+                'customer_phone' => $return->order?->customer_phone,
+                'mismatch' => (bool) $orderStatusMismatch,
+                'accepted_states' => $statesAccepted,
+            ],
+            'edit_context' => [
+                // The edit form is rendered only when the return isn't
+                // closed. The UI also gates on `can('returns.create')`,
+                // matching the backend permission check.
+                'can_edit' => $return->return_status !== 'Closed',
+                'active_refund_total' => $activeRefundsTotal,
+                'min_refund_amount' => $activeRefundsTotal,
+            ],
         ]);
+    }
+
+    /**
+     * Professional Return Management — limited details edit.
+     *
+     * Only `refund_amount`, `shipping_loss_amount`, and `notes` are
+     * accepted. Forbidden fields are stripped at the validation layer
+     * AND ignored at the service layer (defence-in-depth).
+     *
+     * Closed returns are immutable.
+     */
+    public function update(Request $request, OrderReturn $return): RedirectResponse
+    {
+        $data = $request->validate([
+            'refund_amount' => ['nullable', 'numeric', 'min:0'],
+            'shipping_loss_amount' => ['nullable', 'numeric', 'min:0'],
+            'notes' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        try {
+            $this->returns->updateDetails($return, $data, $request->user());
+        } catch (InvalidArgumentException|RuntimeException $e) {
+            return back()->withInput()->with('error', $e->getMessage());
+        }
+
+        return back()->with('success', 'Return details updated.');
     }
 
     /**

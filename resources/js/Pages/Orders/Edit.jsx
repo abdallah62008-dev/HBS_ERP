@@ -2,8 +2,16 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import FormField from '@/Components/FormField';
 import { Head, Link, useForm, usePage } from '@inertiajs/react';
+import { useMemo } from 'react';
 
-export default function OrderEdit({ order, statuses }) {
+export default function OrderEdit({
+    order,
+    statuses,
+    return_reasons = [],
+    return_conditions = ['Good', 'Damaged', 'Missing Parts', 'Unknown'],
+    can_create_return = false,
+    has_return = false,
+}) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
     const { data, setData, put, processing, errors } = useForm({
@@ -23,7 +31,31 @@ export default function OrderEdit({ order, statuses }) {
         extra_fees: order.extra_fees ?? 0,
         status: order.status,
         status_note: '',
+        // Professional Return Management — payload only used when
+        // status=Returned. Same field shape as the Orders/Show modal.
+        return: {
+            return_reason_id: '',
+            product_condition: 'Unknown',
+            refund_amount: 0,
+            shipping_loss_amount: 0,
+            notes: '',
+        },
     });
+
+    // Returned is a transition that REQUIRES creating a return record.
+    // Hide it from the dropdown when the operator can't do that (no
+    // permission, or the order already has a return). The current
+    // value of Returned stays visible so an already-Returned order
+    // still shows correctly.
+    const availableStatuses = useMemo(() => {
+        return statuses.filter((s) => {
+            if (s !== 'Returned') return true;
+            if (order.status === 'Returned') return true;
+            return can_create_return && !has_return;
+        });
+    }, [statuses, order.status, can_create_return, has_return]);
+
+    const isNewReturned = data.status === 'Returned' && order.status !== 'Returned';
 
     const submit = (e) => {
         e.preventDefault();
@@ -101,11 +133,116 @@ export default function OrderEdit({ order, statuses }) {
                                 onChange={(e) => setData('status', e.target.value)}
                                 className="mt-1 block w-full rounded-md border-slate-300 text-sm"
                             >
-                                {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+                                {availableStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
                             </select>
                         </FormField>
                         <FormField label="Status note" name="status_note" value={data.status_note} onChange={(v) => setData('status_note', v)} error={errors.status_note} hint="Stored in the status history" />
                     </div>
+
+                    {/* Helper hint when the operator cannot select Returned. */}
+                    {has_return && order.status !== 'Returned' && (
+                        <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
+                            This order already has a return record —
+                            <Link href={route('returns.show', { return: order.returns?.[0]?.id ?? '' })} className="ml-1 underline">
+                                open the return
+                            </Link>
+                            to manage it. The Returned status option is hidden here to prevent duplicates.
+                        </p>
+                    )}
+                    {!can_create_return && !has_return && order.status !== 'Returned' && (
+                        <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
+                            You do not have permission to create return records, so the <strong>Returned</strong> status option is hidden here.
+                        </p>
+                    )}
+
+                    {/* Professional Return Management — Return Details
+                        section expands ONLY when the operator is moving
+                        the order INTO Returned from this edit page.
+                        Same field shape as the Orders/Show modal. */}
+                    {isNewReturned && (
+                        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 space-y-3">
+                            <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                                Return details
+                            </div>
+                            <p className="text-[11px] text-amber-700">
+                                A return record will be created automatically when you save. After saving you'll land on the return page so you can record the inspection.
+                            </p>
+
+                            <FormField
+                                label={<>Return reason <span className="text-rose-600">*</span></>}
+                                name="return.return_reason_id"
+                                error={errors['return.return_reason_id']}
+                            >
+                                <select
+                                    value={data.return.return_reason_id}
+                                    onChange={(e) => setData('return', { ...data.return, return_reason_id: e.target.value })}
+                                    className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                >
+                                    <option value="">— select a reason —</option>
+                                    {return_reasons.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                </select>
+                            </FormField>
+
+                            <FormField
+                                label="Product condition"
+                                name="return.product_condition"
+                                error={errors['return.product_condition']}
+                            >
+                                <select
+                                    value={data.return.product_condition}
+                                    onChange={(e) => setData('return', { ...data.return, product_condition: e.target.value })}
+                                    className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                >
+                                    {return_conditions.map((c) => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                            </FormField>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <FormField
+                                    label={<>Refund amount {sym && <span className="text-slate-400 font-normal">({sym})</span>}</>}
+                                    name="return.refund_amount"
+                                    error={errors['return.refund_amount']}
+                                >
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={data.return.refund_amount}
+                                        onChange={(e) => setData('return', { ...data.return, refund_amount: e.target.value })}
+                                        className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                    />
+                                </FormField>
+                                <FormField
+                                    label={<>Shipping loss {sym && <span className="text-slate-400 font-normal">({sym})</span>}</>}
+                                    name="return.shipping_loss_amount"
+                                    error={errors['return.shipping_loss_amount']}
+                                >
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={data.return.shipping_loss_amount}
+                                        onChange={(e) => setData('return', { ...data.return, shipping_loss_amount: e.target.value })}
+                                        className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                    />
+                                </FormField>
+                            </div>
+
+                            <FormField
+                                label="Return notes"
+                                name="return.notes"
+                                error={errors['return.notes']}
+                            >
+                                <textarea
+                                    rows={2}
+                                    value={data.return.notes}
+                                    onChange={(e) => setData('return', { ...data.return, notes: e.target.value })}
+                                    placeholder="Optional notes for the return record"
+                                    className="mt-1 block w-full rounded-md border-slate-300 text-sm"
+                                />
+                            </FormField>
+                        </div>
+                    )}
                 </section>
 
                 <section className="rounded-lg border border-slate-200 bg-white p-5">

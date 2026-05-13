@@ -308,6 +308,12 @@ Route::middleware(['auth', 'active'])->group(function () {
         ->name('returns.store');
     Route::middleware('permission:returns.view')->get('/returns/{return}', [ReturnsController::class, 'show'])
         ->name('returns.show');
+    // Professional Return Management — limited details edit. Reuses
+    // returns.create per the design (no new permission slug). Only
+    // refund_amount, shipping_loss_amount, notes are accepted; the
+    // service layer additionally enforces forbidden-field defence.
+    Route::middleware('permission:returns.create')->put('/returns/{return}', [ReturnsController::class, 'update'])
+        ->name('returns.update');
     Route::middleware('permission:returns.inspect')->post('/returns/{return}/inspect', [ReturnsController::class, 'inspect'])
         ->name('returns.inspect');
     Route::middleware('permission:returns.approve')->post('/returns/{return}/close', [ReturnsController::class, 'close'])

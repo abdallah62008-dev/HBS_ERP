@@ -4,8 +4,11 @@ namespace App\Services;
 
 use App\Models\Order;
 use App\Models\OrderReturn;
+use App\Models\Refund;
+use App\Models\User;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 use RuntimeException;
 
 /**
@@ -158,6 +161,120 @@ class ReturnService
             );
 
             return $return->refresh();
+        });
+    }
+
+    /**
+     * Limited details edit for an existing return — back-office correction
+     * path for the three NON-state-machine fields.
+     *
+     * Allowed fields:
+     *   - refund_amount
+     *   - shipping_loss_amount
+     *   - notes
+     *
+     * Forbidden fields (every other key in $data is silently ignored at
+     * the service layer — defence-in-depth on top of the controller's
+     * validate() whitelist):
+     *   - return_status   (lifecycle state — change via inspect/close)
+     *   - product_condition / restockable (inventory side-effects — inspect)
+     *   - inspected_*, closed_*, created_by  (system-managed)
+     *   - order_id, customer_id, return_reason_id  (would re-link the return)
+     *
+     * Guards:
+     *   - return.canBeEdited() (status !== 'Closed')
+     *   - refund_amount cannot drop below the sum of linked active refunds
+     *     (`Refund::ACTIVE_STATUSES`, mirroring the Phase 5C over-return
+     *     guard in reverse).
+     *
+     * No order status change. No refund creation. No cashbox writes.
+     *
+     * @param  array{refund_amount?: numeric, shipping_loss_amount?: numeric, notes?: ?string}  $data
+     */
+    public function updateDetails(OrderReturn $return, array $data, ?User $user = null): OrderReturn
+    {
+        if (in_array($return->return_status, ['Closed'], true)) {
+            throw new RuntimeException(
+                "Return #{$return->id} is closed and cannot be edited."
+            );
+        }
+
+        $actor = $user ?? Auth::user();
+
+        return DB::transaction(function () use ($return, $data, $actor) {
+            $locked = OrderReturn::query()->lockForUpdate()->findOrFail($return->id);
+
+            if ($locked->return_status === 'Closed') {
+                throw new RuntimeException(
+                    "Return #{$locked->id} is closed and cannot be edited."
+                );
+            }
+
+            $old = [
+                'refund_amount' => (string) $locked->refund_amount,
+                'shipping_loss_amount' => (string) $locked->shipping_loss_amount,
+                'notes' => $locked->notes,
+            ];
+
+            $patch = [];
+
+            if (array_key_exists('refund_amount', $data) && $data['refund_amount'] !== null && $data['refund_amount'] !== '') {
+                $newAmount = round((float) $data['refund_amount'], 2);
+                if ($newAmount < 0) {
+                    throw new InvalidArgumentException('Refund amount cannot be negative.');
+                }
+
+                // Cannot drop refund_amount below the sum of active refunds
+                // already linked to this return. Active = requested | approved | paid.
+                $activeRefundTotal = (float) Refund::query()
+                    ->where('order_return_id', $locked->id)
+                    ->whereIn('status', Refund::ACTIVE_STATUSES)
+                    ->sum('amount');
+
+                if ($newAmount < $activeRefundTotal) {
+                    throw new InvalidArgumentException(
+                        "Refund amount ({$newAmount}) cannot be reduced below the cumulative active refunds "
+                        . "({$activeRefundTotal}) already linked to this return."
+                    );
+                }
+
+                $patch['refund_amount'] = $newAmount;
+            }
+
+            if (array_key_exists('shipping_loss_amount', $data) && $data['shipping_loss_amount'] !== null && $data['shipping_loss_amount'] !== '') {
+                $newShipping = round((float) $data['shipping_loss_amount'], 2);
+                if ($newShipping < 0) {
+                    throw new InvalidArgumentException('Shipping loss amount cannot be negative.');
+                }
+                $patch['shipping_loss_amount'] = $newShipping;
+            }
+
+            if (array_key_exists('notes', $data)) {
+                $patch['notes'] = $data['notes'] !== null ? (string) $data['notes'] : null;
+            }
+
+            if (empty($patch)) {
+                // Nothing changed — short-circuit, don't audit a no-op.
+                return $locked->refresh();
+            }
+
+            $patch['updated_by'] = $actor?->id;
+            $locked->forceFill($patch)->save();
+
+            AuditLogService::log(
+                action: 'updated',
+                module: 'returns',
+                recordType: OrderReturn::class,
+                recordId: $locked->id,
+                oldValues: $old,
+                newValues: [
+                    'refund_amount' => isset($patch['refund_amount']) ? (string) $patch['refund_amount'] : $old['refund_amount'],
+                    'shipping_loss_amount' => isset($patch['shipping_loss_amount']) ? (string) $patch['shipping_loss_amount'] : $old['shipping_loss_amount'],
+                    'notes' => array_key_exists('notes', $patch) ? $patch['notes'] : $old['notes'],
+                ],
+            );
+
+            return $locked->refresh();
         });
     }
 

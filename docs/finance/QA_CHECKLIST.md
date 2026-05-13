@@ -133,6 +133,21 @@ Legend for the **Pass / Fail** column:
 | 6.6 | Try to request a second refund against the same return for the full return refund_amount again | Order Agent | Validation error: "Cumulative active refunds for return #X would exceed the return's refund_amount" | ⚪ | |
 | 6.7 | Try to request a refund against a return whose status is `Pending` (not yet inspected) | Order Agent | Validation error: "is not eligible to request a refund" | ⚪ | |
 
+### Professional Return Management (Phase 5G follow-up)
+
+Additional checks for the order-status modal flow + Return Show control center:
+
+| # | Step | Acting as | Expected | Pass/Fail | Notes |
+|---|---|---|---|:-:|---|
+| 6.8 | From `/orders/{id}` of a Delivered order, click **Change status** → pick `Returned`. Modal expands with Return Details section | Order Agent | Modal shows reason / condition / refund amount / shipping loss / notes; `Returned` is hidden if the user lacks `returns.create` or the order already has a return | ⚪ | |
+| 6.9 | Submit modal with a reason → return record is created and order status becomes Returned in one atomic transaction | Order Agent | Redirect to the new return's show page with success flash | ⚪ | |
+| 6.10 | Open the return show page → confirm Order Summary card displays the linked order number, status badge, and customer info | — | Order status shown as `Returned`; no mismatch warning | ⚪ | |
+| 6.11 | Manually create a return for an order still in `Delivered` (legacy path via `/returns/create`) and open its show page | Order Agent | Amber warning appears: "This return exists, but the linked order status is still 'Delivered'..." | ⚪ | |
+| 6.12 | On a non-Closed return, use the **Edit details** panel to change refund amount, shipping loss, and notes | Order Agent (has `returns.create`) | Success flash; values persisted; `return_status` + `product_condition` + `restockable` unchanged | ⚪ | |
+| 6.13 | Try to reduce `refund_amount` below the sum of active linked refunds | Order Agent | Flash error: "Refund amount … cannot be reduced below the cumulative active refunds …" | ⚪ | |
+| 6.14 | Close the return, then try to edit details again | Manager → Order Agent | Edit form is hidden; "This return is closed. Details are locked." note shown | ⚪ | |
+| 6.15 | As a user with `returns.view` only (no `returns.create`), open a return show page | Warehouse | Edit Details panel is not visible; Inspect/Close/Request-refund are gated by their own slugs as before | ⚪ | |
+
 ---
 
 ## Journey 7 — Marketer payout lifecycle (requested → approved → paid)
