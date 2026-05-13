@@ -569,7 +569,7 @@ export default function OrderCreate({ products, categories = [], locations = [],
                             label="On behalf of marketer"
                             name="marketer_id"
                             error={errors.marketer_id}
-                            hint="Optional · enables the Phase 5.9 marketer profit preview"
+                            hint="Optional · enables the marketer profit preview"
                             className="lg:col-span-2"
                         >
                             <select

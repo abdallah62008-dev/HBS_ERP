@@ -39,7 +39,7 @@ class SettingsSeeder extends Seeder
             'country' => ['general', 'string', 'Egypt'],
             'default_country_code' => ['localization', 'string', 'EG'],
             'currency_code' => ['general', 'string', 'EGP'],
-            'currency_symbol' => ['general', 'string', 'ج.م'],
+            'currency_symbol' => ['general', 'string', 'جنيه'],
             'timezone' => ['general', 'string', 'Africa/Cairo'],
 
             // Tax

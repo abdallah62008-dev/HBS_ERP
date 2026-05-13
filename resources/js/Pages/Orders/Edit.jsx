@@ -107,7 +107,7 @@ export default function OrderEdit({
                 {can_view_profit && order.marketer_id && order.marketer_profit !== null && order.marketer_profit !== undefined && (
                     <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-5">
                         <div className="flex items-center justify-between">
-                            <h2 className="text-sm font-semibold text-emerald-800">Marketer profit (Phase 5.9 snapshot)</h2>
+                            <h2 className="text-sm font-semibold text-emerald-800">Marketer profit (snapshot)</h2>
                             <span className="font-mono text-base font-semibold text-emerald-900">
                                 {sym}{Number(order.marketer_profit).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
@@ -125,7 +125,7 @@ export default function OrderEdit({
                         <FormField label="Shipping" name="shipping_amount" type="number" value={data.shipping_amount} onChange={(v) => setData('shipping_amount', v)} error={errors.shipping_amount} />
                         <FormField label="Extra fees" name="extra_fees" type="number" value={data.extra_fees} onChange={(v) => setData('extra_fees', v)} error={errors.extra_fees} />
                     </div>
-                    <p className="mt-2 text-xs text-slate-500">Item-level edits are blocked once an order is created — recreate the order or contact a manager. Phase 4 adds a finer-grained item-edit flow with approval.</p>
+                    <p className="mt-2 text-xs text-slate-500">Item-level edits are blocked once an order is created — recreate the order or contact a manager.</p>
                 </section>
 
                 <section className="rounded-lg border border-slate-200 bg-white p-5">

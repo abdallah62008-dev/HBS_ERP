@@ -26,7 +26,7 @@ export default function WarehousesIndex({ warehouses }) {
     return (
         <AuthenticatedLayout header="Warehouses">
             <Head title="Warehouses" />
-            <PageHeader title="Warehouses" subtitle="Stock locations. Phase 3." />
+            <PageHeader title="Warehouses" subtitle="Stock locations." />
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 {can('inventory.adjust') && (

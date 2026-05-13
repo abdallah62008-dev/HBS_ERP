@@ -45,7 +45,7 @@ export default function MarketerCreate({ price_groups, marketer_tiers = [] }) {
                                 {price_groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                             </select>
                         </FormField>
-                        <FormField label="Pricing tier" name="marketer_price_tier_id" error={errors.marketer_price_tier_id} hint="Drives Phase 5.6 product tier prices for this marketer.">
+                        <FormField label="Pricing tier" name="marketer_price_tier_id" error={errors.marketer_price_tier_id} hint="Drives the product tier prices for this marketer.">
                             {marketer_tiers.length === 0 ? (
                                 <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                                     No marketer pricing tiers found. Please run seeders.

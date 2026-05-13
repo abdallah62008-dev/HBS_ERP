@@ -27,7 +27,7 @@ export default function CategoriesIndex({ categories }) {
     return (
         <AuthenticatedLayout header="Categories">
             <Head title="Categories" />
-            <PageHeader title="Categories" subtitle="Group products. Phase 2." />
+            <PageHeader title="Categories" subtitle="Group products." />
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 {/* Create form */}

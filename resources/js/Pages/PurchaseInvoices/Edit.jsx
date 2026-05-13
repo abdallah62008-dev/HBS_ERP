@@ -30,7 +30,7 @@ export default function PurchaseInvoiceEdit({ invoice, suppliers, warehouses, pr
     return (
         <AuthenticatedLayout header={`Edit ${invoice.invoice_number}`}>
             <Head title={`Edit ${invoice.invoice_number}`} />
-            <PageHeader title={`Edit ${invoice.invoice_number}`} subtitle="Draft only — approved invoices need an approval request to edit (Phase 8)." />
+            <PageHeader title={`Edit ${invoice.invoice_number}`} subtitle="Draft only — approved invoices need an approval request to edit." />
 
             <form onSubmit={submit}>
                 <PurchaseInvoiceForm data={data} setData={setData} errors={errors} suppliers={suppliers} warehouses={warehouses} products={products} sym={sym} />

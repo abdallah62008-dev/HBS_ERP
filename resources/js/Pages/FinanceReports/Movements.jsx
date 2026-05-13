@@ -7,7 +7,7 @@ import { useState } from 'react';
 
 function fmt(n, currency = 'EGP') {
     const x = Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return `${currency} ${x}`;
+    return currency === 'EGP' ? `${x} جنيه` : `${currency} ${x}`;
 }
 
 export default function MovementsReport({

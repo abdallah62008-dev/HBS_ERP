@@ -168,7 +168,6 @@ export default function AuthenticatedLayout({ header, children }) {
                                 <span className="text-slate-200">{user.role.name}</span>
                             </div>
                         )}
-                        <div className="truncate">v0.1 — Phase 1</div>
                     </div>
                 )}
             </aside>

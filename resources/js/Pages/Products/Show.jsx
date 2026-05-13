@@ -67,7 +67,6 @@ export default function ProductShow({ product }) {
                 <div className="rounded-lg border border-slate-200 bg-white p-5">
                     <h2 className="text-sm font-semibold text-slate-700">Reorder</h2>
                     <div className="mt-2 text-3xl font-semibold tabular-nums text-slate-800">{product.reorder_level}</div>
-                    <p className="mt-1 text-xs text-slate-500">Phase 3 wires inventory to this threshold.</p>
                 </div>
             </div>
 

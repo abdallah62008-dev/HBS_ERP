@@ -14,7 +14,7 @@ function fmtAmount(value, currency = 'EGP') {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     });
-    return `${currency} ${n}`;
+    return currency === 'EGP' ? `${n} جنيه` : `${currency} ${n}`;
 }
 
 export default function CashboxTransfersIndex({ transfers, filters, cashboxes }) {

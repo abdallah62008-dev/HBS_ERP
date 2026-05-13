@@ -87,9 +87,9 @@ export default function RefundForm({ data, setData, errors }) {
             </FormField>
 
             <div className="sm:col-span-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                <strong>Phase 5A:</strong> refunds are paperwork-only.
+                <strong>Note:</strong> refunds are paperwork-only.
                 Approving a refund records the decision but does NOT
-                move money. The cashbox payment step lands in Phase 5B.
+                move money. The cashbox payment is a separate step.
             </div>
         </div>
     );
