@@ -272,6 +272,13 @@ class RefundService
                 ],
             );
 
+            // Phase 5D — best-effort marketer profit reversal. Runs
+            // inside the same transaction so a reversal failure rolls
+            // the refund payment back; in practice the helper never
+            // throws and silently skips when conditions don't apply
+            // (no marketer, no profit snapshot, already reversed, etc.).
+            app(MarketerProfitReversalService::class)->reverseFromPaidRefund($locked);
+
             return $locked->fresh(['cashbox', 'paymentMethod', 'cashboxTransaction', 'paidBy']);
         });
     }

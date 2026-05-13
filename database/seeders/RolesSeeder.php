@@ -87,6 +87,9 @@ class RolesSeeder extends Seeder
             'payment_methods.view', 'cashbox_transfers.view',
             // Finance Phase 5A — managers own the approve/reject path on refunds.
             'refunds.view', 'refunds.create', 'refunds.approve', 'refunds.reject',
+            // Finance Phase 5D — managers approve/reject marketer payouts but
+            // do not execute the cashbox payment (separation of duties).
+            'marketer_payouts.view', 'marketer_payouts.approve', 'marketer_payouts.reject',
         ];
 
         $orderAgent = [
@@ -157,6 +160,12 @@ class RolesSeeder extends Seeder
             // Finance Phase 5B — accountant is the one who actually pays
             // the refund from the cashbox.
             'refunds.pay',
+            // Finance Phase 5D — accountant requests payouts, rejects
+            // unfunded ones, and executes the cashbox payment. `approve`
+            // is intentionally NOT granted — it stays with management
+            // (Phase 0 separation of duties matrix).
+            'marketer_payouts.view', 'marketer_payouts.create',
+            'marketer_payouts.reject', 'marketer_payouts.pay',
         ];
 
         $marketer = [

@@ -20,6 +20,10 @@ class MarketerTransaction extends Model
         'marketer_id', 'order_id', 'transaction_type',
         'selling_price', 'trade_product_price', 'shipping_amount', 'tax_amount', 'extra_fees',
         'net_profit', 'status', 'notes', 'created_by',
+        // Phase 5D — optional traceability for Payout (mirror of
+        // marketer_payouts.id) and Adjustment (e.g. refund-driven
+        // profit reversal). Nullable; existing callers omit them.
+        'source_type', 'source_id',
     ];
 
     protected $casts = [

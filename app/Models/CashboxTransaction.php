@@ -51,6 +51,7 @@ class CashboxTransaction extends Model
     public const SOURCE_COLLECTION = 'collection';
     public const SOURCE_EXPENSE = 'expense';
     public const SOURCE_REFUND = 'refund';
+    public const SOURCE_MARKETER_PAYOUT = 'marketer_payout';
 
     /** Phase 1 source_type whitelist. Later phases extend this list. */
     public const PHASE_1_SOURCE_TYPES = [
@@ -90,6 +91,17 @@ class CashboxTransaction extends Model
         self::SOURCE_COLLECTION,
         self::SOURCE_EXPENSE,
         self::SOURCE_REFUND,
+    ];
+
+    /** Phase 5D adds the `marketer_payout` source_type (OUT, written on payout.pay). */
+    public const PHASE_5D_SOURCE_TYPES = [
+        self::SOURCE_OPENING_BALANCE,
+        self::SOURCE_ADJUSTMENT,
+        self::SOURCE_TRANSFER,
+        self::SOURCE_COLLECTION,
+        self::SOURCE_EXPENSE,
+        self::SOURCE_REFUND,
+        self::SOURCE_MARKETER_PAYOUT,
     ];
 
     protected $fillable = [

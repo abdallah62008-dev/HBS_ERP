@@ -128,6 +128,7 @@ export const sidebarSections = [
             { label: 'Expenses', href: '/expenses', icon: I.cash, permission: 'expenses.view' },
             { label: 'Collections', href: '/collections', icon: I.cash, permission: 'collections.view' },
             { label: 'Refunds', href: '/refunds', icon: I.revert, permission: 'refunds.view' },
+            { label: 'Marketer Payouts', href: '/marketer-payouts', icon: I.cash, permission: 'marketer_payouts.view' },
         ],
     },
     {

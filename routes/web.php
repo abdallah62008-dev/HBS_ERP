@@ -20,6 +20,7 @@ use App\Http\Controllers\ExpensesController;
 use App\Http\Controllers\PaymentMethodsController;
 use App\Http\Controllers\RefundsController;
 use App\Http\Controllers\InventoryController;
+use App\Http\Controllers\MarketerPayoutsController;
 use App\Http\Controllers\MarketerPortalController;
 use App\Http\Controllers\MarketersController;
 use App\Http\Controllers\MarketerStatementController;
@@ -419,6 +420,17 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:marketers.prices')->get('/marketers/{marketer}/prices', [MarketersController::class, 'prices'])->name('marketers.prices');
     Route::middleware('permission:marketers.prices')->post('/marketers/{marketer}/prices', [MarketersController::class, 'storePrice'])->name('marketers.prices.store');
     Route::middleware('permission:marketers.prices')->delete('/marketers/{marketer}/prices/{price}', [MarketersController::class, 'destroyPrice'])->name('marketers.prices.destroy');
+
+    /* ─────────────── Marketer Payouts (Finance Phase 5D) ─────────────── */
+    Route::middleware('permission:marketer_payouts.view')->get('/marketer-payouts', [MarketerPayoutsController::class, 'index'])->name('marketer-payouts.index');
+    Route::middleware('permission:marketer_payouts.create')->get('/marketer-payouts/create', [MarketerPayoutsController::class, 'create'])->name('marketer-payouts.create');
+    Route::middleware('permission:marketer_payouts.create')->post('/marketer-payouts', [MarketerPayoutsController::class, 'store'])->name('marketer-payouts.store');
+    Route::middleware('permission:marketer_payouts.create')->get('/marketer-payouts/{payout}/edit', [MarketerPayoutsController::class, 'edit'])->name('marketer-payouts.edit');
+    Route::middleware('permission:marketer_payouts.create')->put('/marketer-payouts/{payout}', [MarketerPayoutsController::class, 'update'])->name('marketer-payouts.update');
+    Route::middleware('permission:marketer_payouts.create')->delete('/marketer-payouts/{payout}', [MarketerPayoutsController::class, 'destroy'])->name('marketer-payouts.destroy');
+    Route::middleware('permission:marketer_payouts.approve')->post('/marketer-payouts/{payout}/approve', [MarketerPayoutsController::class, 'approve'])->name('marketer-payouts.approve');
+    Route::middleware('permission:marketer_payouts.reject')->post('/marketer-payouts/{payout}/reject', [MarketerPayoutsController::class, 'reject'])->name('marketer-payouts.reject');
+    Route::middleware('permission:marketer_payouts.pay')->post('/marketer-payouts/{payout}/pay', [MarketerPayoutsController::class, 'pay'])->name('marketer-payouts.pay');
 
     /* ─────────────── Staff (Phase 6) ─────────────── */
     Route::middleware('permission:users.manage')->get('/staff', fn () => redirect()->route('staff-targets.index'))->name('staff.index');

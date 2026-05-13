@@ -160,6 +160,17 @@ class PermissionsSeeder extends Seeder
                 'marketers.statement' => 'View marketer statement',
                 'marketers.prices' => 'Manage marketer prices',
             ],
+            // Finance Phase 5D — marketer payout workflow (request →
+            // approve/reject → pay). Separate slug group so the
+            // separation of duties matrix can grant `pay` only to the
+            // accountant role and keep `approve` with management.
+            'marketer_payouts' => [
+                'marketer_payouts.view' => 'View marketer payouts',
+                'marketer_payouts.create' => 'Request marketer payout',
+                'marketer_payouts.approve' => 'Approve marketer payout',
+                'marketer_payouts.reject' => 'Reject marketer payout',
+                'marketer_payouts.pay' => 'Pay marketer payout from cashbox',
+            ],
             // Phase 7 — internal-support / customer-issue tickets.
             'tickets' => [
                 'tickets.view' => 'View tickets',
