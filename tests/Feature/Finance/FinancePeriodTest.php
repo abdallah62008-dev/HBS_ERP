@@ -241,6 +241,59 @@ class FinancePeriodTest extends TestCase
         $this->assertSame(100.0, (float) $tx->amount);
     }
 
+    /* ────────── Phase 5F.1 — CashboxesController surfaces guard as flash, not 500 ────────── */
+
+    public function test_cashbox_adjustment_via_controller_redirects_back_with_error_when_period_closed(): void
+    {
+        $this->makePeriod(status: 'closed', start: '2026-05-01', end: '2026-05-31');
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+
+        $user = $this->userWith(['cashbox_transactions.create']);
+
+        $response = $this->actingAs($user)->post('/cashboxes/' . $cashbox->id . '/transactions', [
+            'direction' => 'in',
+            'amount' => 100,
+            'notes' => 'attempted',
+            'occurred_at' => '2026-05-15 10:00:00',
+        ]);
+
+        // Redirect-back-with-flash-error, NOT a 500.
+        $response->assertStatus(302);
+        $response->assertSessionHas('error');
+        $this->assertStringContainsString('closed', session('error'));
+
+        // No cashbox transaction was created (other than the opening balance).
+        $this->assertSame(
+            1,
+            \App\Models\CashboxTransaction::where('cashbox_id', $cashbox->id)->count(),
+            'Only the opening_balance tx exists; the blocked adjustment did not land.'
+        );
+    }
+
+    public function test_cashbox_adjustment_via_controller_succeeds_when_period_open(): void
+    {
+        $this->makePeriod(status: 'closed', start: '2026-05-01', end: '2026-05-31');
+        $cashbox = $this->makeCashbox(['opening_balance' => 1000]);
+
+        $user = $this->userWith(['cashbox_transactions.create']);
+
+        $response = $this->actingAs($user)->post('/cashboxes/' . $cashbox->id . '/transactions', [
+            'direction' => 'in',
+            'amount' => 250,
+            'notes' => 'outside the closed range',
+            'occurred_at' => '2026-06-10 10:00:00',
+        ]);
+
+        $response->assertStatus(302);
+        $response->assertSessionHas('success');
+
+        $this->assertSame(
+            2,
+            \App\Models\CashboxTransaction::where('cashbox_id', $cashbox->id)->count(),
+            'Opening balance + the new adjustment row.'
+        );
+    }
+
     public function test_cashbox_transfer_inside_closed_period_is_blocked(): void
     {
         $period = $this->makePeriod(status: 'closed', start: '2026-05-01', end: '2026-05-31');

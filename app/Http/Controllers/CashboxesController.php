@@ -10,6 +10,8 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use InvalidArgumentException;
+use RuntimeException;
 
 /**
  * Finance Phase 1 — Cashboxes UI controller.
@@ -66,7 +68,17 @@ class CashboxesController extends Controller
 
     public function store(CashboxRequest $request): RedirectResponse
     {
-        $cashbox = $this->service->createCashbox($request->validated());
+        // Phase 5F.1 — surface FinancePeriodService closed-period errors
+        // (and the existing `already has transactions` guard from
+        // CashboxService::createOpeningBalanceTransaction) as a flash
+        // message instead of a 500. Mirrors the pattern used by the
+        // other finance controllers (refunds, payouts, transfers,
+        // collections, expenses).
+        try {
+            $cashbox = $this->service->createCashbox($request->validated());
+        } catch (InvalidArgumentException|RuntimeException $e) {
+            return back()->withInput()->with('error', $e->getMessage());
+        }
 
         return redirect()
             ->route('cashboxes.index')
@@ -179,7 +191,14 @@ class CashboxesController extends Controller
             'occurred_at' => ['nullable', 'date'],
         ]);
 
-        $this->service->createAdjustmentTransaction($cashbox, $data);
+        // Phase 5F.1 — surface FinancePeriodService closed-period errors
+        // and CashboxService guards (inactive cashbox, missing notes,
+        // direction/amount mismatch) as a flash message instead of a 500.
+        try {
+            $this->service->createAdjustmentTransaction($cashbox, $data);
+        } catch (InvalidArgumentException|RuntimeException $e) {
+            return back()->withInput()->with('error', $e->getMessage());
+        }
 
         return back()->with('success', 'Adjustment recorded.');
     }
