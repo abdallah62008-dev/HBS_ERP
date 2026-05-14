@@ -641,7 +641,15 @@ class OrdersController extends Controller
             // Optional return payload. Required keys are gated by
             // `required_if:status,Returned` below.
             'return' => ['nullable', 'array'],
-            'return.return_reason_id' => ['required_if:status,Returned', 'exists:return_reasons,id'],
+            // `nullable` MUST come first: the Orders/Show modal always
+            // sends a `return` object, so `return.return_reason_id`
+            // arrives present-but-empty for non-Returned changes. The
+            // global ConvertEmptyStringsToNull middleware rewrites that
+            // '' to null — without `nullable`, the `exists` rule would
+            // then run against null and fail, silently rejecting EVERY
+            // status change. `required_if` still forces a real reason
+            // when the target status is `Returned`.
+            'return.return_reason_id' => ['nullable', 'required_if:status,Returned', 'exists:return_reasons,id'],
             'return.product_condition' => ['nullable', Rule::in(OrderReturn::CONDITIONS)],
             'return.refund_amount' => ['nullable', 'numeric', 'min:0'],
             'return.shipping_loss_amount' => ['nullable', 'numeric', 'min:0'],

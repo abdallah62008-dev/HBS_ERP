@@ -258,6 +258,100 @@ class ReturnFromStatusChangeTest extends TestCase
         $this->assertSame(0, OrderReturn::count());
     }
 
+    /* ───── 5b. Real frontend payload — full `return` object on non-Returned status ───── */
+
+    /**
+     * Regression: the Orders/Show "Change status" modal and the
+     * Orders/Edit form ALWAYS send a `return` object, even for
+     * non-Returned status changes. `return.return_reason_id` leaves the
+     * browser as '' which the global ConvertEmptyStringsToNull
+     * middleware rewrites to null. Before the fix, the
+     * `exists:return_reasons,id` rule ran against null and failed,
+     * silently rejecting EVERY status change from the modal. These
+     * tests post the EXACT payload shape the React forms send.
+     */
+    public function test_change_status_accepts_full_return_object_for_non_returned_status(): void
+    {
+        $user = $this->userWith(['orders.change_status', 'orders.view']);
+        $order = $this->placedOrder(); // status='New'
+
+        $this->actingAs($user)
+            ->from('/orders/' . $order->id)
+            ->post('/orders/' . $order->id . '/status', [
+                'status' => 'Confirmed',
+                'note' => '',
+                'return' => [
+                    'return_reason_id' => '',
+                    'product_condition' => 'Unknown',
+                    'refund_amount' => 0,
+                    'shipping_loss_amount' => 0,
+                    'notes' => '',
+                ],
+            ])
+            ->assertSessionHasNoErrors()
+            ->assertRedirect();
+
+        $this->assertSame('Confirmed', $order->fresh()->status);
+        $this->assertSame(0, OrderReturn::count(), 'No return should be created for a non-Returned status change.');
+    }
+
+    public function test_change_status_returned_with_empty_reason_in_return_object_is_blocked(): void
+    {
+        // The modal sends the `return` object with an EMPTY reason on the
+        // Returned path. `nullable` only relaxes the rule for non-Returned
+        // statuses — `required_if:status,Returned` must still reject this.
+        $user = $this->userWith(['orders.change_status', 'returns.create', 'orders.view']);
+        $order = $this->deliveredOrder();
+
+        $this->actingAs($user)
+            ->from('/orders/' . $order->id)
+            ->post('/orders/' . $order->id . '/status', [
+                'status' => 'Returned',
+                'note' => '',
+                'return' => [
+                    'return_reason_id' => '',
+                    'product_condition' => 'Unknown',
+                    'refund_amount' => 0,
+                    'shipping_loss_amount' => 0,
+                    'notes' => '',
+                ],
+            ])
+            ->assertSessionHasErrors('return.return_reason_id');
+
+        $this->assertSame('Delivered', $order->fresh()->status);
+        $this->assertSame(0, OrderReturn::count());
+    }
+
+    public function test_order_update_accepts_full_return_object_for_non_returned_status(): void
+    {
+        $user = $this->userWith(['orders.edit', 'orders.view', 'orders.change_status']);
+        $order = $this->placedOrder(); // status='New'
+
+        $this->actingAs($user)
+            ->from('/orders/' . $order->id . '/edit')
+            ->put('/orders/' . $order->id, [
+                'customer_address' => '1 Updated Street',
+                'city' => 'Cairo',
+                'country' => 'Egypt',
+                'status' => 'Confirmed',
+                'status_note' => '',
+                'return' => [
+                    'return_reason_id' => '',
+                    'product_condition' => 'Unknown',
+                    'refund_amount' => 0,
+                    'shipping_loss_amount' => 0,
+                    'notes' => '',
+                ],
+            ])
+            ->assertSessionHasNoErrors()
+            ->assertRedirect();
+
+        $fresh = $order->fresh();
+        $this->assertSame('Confirmed', $fresh->status);
+        $this->assertSame('1 Updated Street', $fresh->customer_address);
+        $this->assertSame(0, OrderReturn::count(), 'No return should be created for a non-Returned status change.');
+    }
+
     /* ────────────────────── 6. Inventory + audit pass-through ────────────────────── */
 
     public function test_inventory_return_to_stock_still_fires_via_existing_orderservice_path(): void
@@ -604,6 +698,81 @@ class ReturnFromStatusChangeTest extends TestCase
         $this->assertSame($return->id, (int) $refund->order_return_id);
     }
 
+    /* ────────────────────── 9. Order Agent role — RBAC for returns ────────────────────── */
+
+    /**
+     * Business decision: Order Agents process customer returns on
+     * Delivered orders. The professional return flow gates the
+     * `Returned` transition (which atomically creates a return record)
+     * behind `returns.create`, so the seeded `order-agent` role must
+     * carry both `returns.view` and `returns.create` — otherwise the
+     * status dropdown silently hides the `Returned` option for them.
+     */
+    public function test_order_agent_role_has_returns_create_permission(): void
+    {
+        $role = Role::where('slug', 'order-agent')->firstOrFail();
+        $slugs = $role->permissions()->pluck('slug')->all();
+
+        $this->assertContains('returns.view', $slugs);
+        $this->assertContains('returns.create', $slugs);
+        // Scope guard: order agents create/view returns but do NOT
+        // approve or inspect them — those stay with manager + warehouse.
+        $this->assertNotContains('returns.approve', $slugs);
+        $this->assertNotContains('returns.inspect', $slugs);
+    }
+
+    public function test_order_agent_can_change_delivered_to_returned_from_show(): void
+    {
+        $user = $this->userWithSeededRole('order-agent');
+        $order = $this->deliveredOrder();
+
+        $this->actingAs($user)
+            ->post('/orders/' . $order->id . '/status', [
+                'status' => 'Returned',
+                'return' => [
+                    'return_reason_id' => $this->reason->id,
+                    'product_condition' => 'Good',
+                    'refund_amount' => 200,
+                ],
+            ])
+            ->assertRedirect();
+
+        $this->assertSame('Returned', $order->fresh()->status);
+        $return = OrderReturn::where('order_id', $order->id)->firstOrFail();
+        $this->assertSame('Pending', $return->return_status);
+        $this->assertSame($this->reason->id, $return->return_reason_id);
+    }
+
+    public function test_order_agent_can_change_delivered_to_returned_from_edit(): void
+    {
+        $user = $this->userWithSeededRole('order-agent');
+        $order = $this->deliveredOrder();
+
+        $response = $this->actingAs($user)
+            ->put('/orders/' . $order->id, [
+                'customer_address' => '1 Order-Agent Street',
+                'city' => 'Cairo',
+                'country' => 'Egypt',
+                'status' => 'Returned',
+                'status_note' => 'via edit page by order agent',
+                'return' => [
+                    'return_reason_id' => $this->reason->id,
+                    'product_condition' => 'Good',
+                    'refund_amount' => 150,
+                ],
+            ]);
+
+        $response->assertRedirect();
+
+        $fresh = $order->fresh();
+        $this->assertSame('Returned', $fresh->status);
+        $this->assertSame('1 Order-Agent Street', $fresh->customer_address);
+
+        $return = OrderReturn::where('order_id', $order->id)->firstOrFail();
+        $this->assertSame('Pending', $return->return_status);
+        $response->assertRedirect('/returns/' . $return->id);
+    }
+
     /* ────────────────────── Helpers ────────────────────── */
 
     private function placedOrder(int $qty = 1): Order
@@ -690,6 +859,25 @@ class ReturnFromStatusChangeTest extends TestCase
         return User::create([
             'name' => 'UX Status Flow Test User',
             'email' => 'ux-status+' . uniqid() . '@hbs.local',
+            'password' => Hash::make('password'),
+            'role_id' => $role->id,
+            'status' => 'Active',
+        ]);
+    }
+
+    /**
+     * Create a user bound to one of the REAL seeded system roles
+     * (e.g. 'order-agent') — as opposed to userWith(), which builds a
+     * synthetic role from an explicit slug list. Used to prove the
+     * shipped RBAC config, not a hand-picked permission set.
+     */
+    private function userWithSeededRole(string $slug): User
+    {
+        $role = Role::where('slug', $slug)->firstOrFail();
+
+        return User::create([
+            'name' => 'Seeded Role Test User',
+            'email' => 'seeded-role+' . uniqid() . '@hbs.local',
             'password' => Hash::make('password'),
             'role_id' => $role->id,
             'status' => 'Active',

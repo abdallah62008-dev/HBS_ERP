@@ -104,6 +104,13 @@ class RolesSeeder extends Seeder
             'products.view',
             // Order agents handle customer-issue tickets at intake (Phase 7).
             'tickets.view', 'tickets.create',
+            // Order agents process customer returns on Delivered orders.
+            // The professional return flow gates the `Returned` status
+            // transition (which atomically creates a return record)
+            // behind `returns.create`; without it the option is hidden
+            // from the status dropdown. `approve` / `inspect` stay with
+            // manager + warehouse agent.
+            'returns.view', 'returns.create',
             // Finance Phase 5A — order agents can request refunds at intake;
             // approve / reject stay with manager + admin.
             'refunds.view', 'refunds.create',

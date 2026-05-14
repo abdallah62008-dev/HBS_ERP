@@ -15,7 +15,7 @@ export default function OrderEdit({
 }) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
-    const { data, setData, put, processing, errors } = useForm({
+    const form = useForm({
         customer_address: order.customer_address ?? '',
         city: order.city ?? '',
         governorate: order.governorate ?? '',
@@ -42,6 +42,7 @@ export default function OrderEdit({
             notes: '',
         },
     });
+    const { data, setData, processing, errors } = form;
 
     // Returned is a transition that REQUIRES creating a return record.
     // Hide it from the dropdown when the operator can't do that (no
@@ -60,7 +61,25 @@ export default function OrderEdit({
 
     const submit = (e) => {
         e.preventDefault();
-        put(route('orders.update', order.id));
+        // Only carry the `return` payload when this save is a genuine NEW
+        // transition into Returned. For every other case (no status
+        // change, non-Returned status, or an already-Returned order being
+        // edited) strip it so the backend never validates a half-empty
+        // return object.
+        //
+        // NOTE: `form.transform()` returns undefined in @inertiajs/react —
+        // it must be called as its own statement, NOT chained before
+        // `.put()`. Chaining throws a TypeError and the request never
+        // fires (Save appears to do nothing).
+        form.transform((payload) => {
+            const newReturned = payload.status === 'Returned' && order.status !== 'Returned';
+            if (!newReturned) {
+                const { return: _unused, ...rest } = payload;
+                return rest;
+            }
+            return payload;
+        });
+        form.put(route('orders.update', order.id));
     };
 
     return (

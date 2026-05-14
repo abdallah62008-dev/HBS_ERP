@@ -2,7 +2,7 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import StatusBadge from '@/Components/StatusBadge';
 import useCan from '@/Hooks/useCan';
-import { Head, Link, useForm, usePage } from '@inertiajs/react';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import { useMemo, useState } from 'react';
 
 function fmt(n) {
@@ -61,9 +61,23 @@ export default function OrderShow({
 
     const submitStatus = (e) => {
         e.preventDefault();
-        // Backend uses `required_if:status,Returned` to validate the
-        // return payload, so we send it as-is. For non-Returned status
-        // the controller ignores the `return` array.
+        // Only send the `return` payload when actually transitioning to
+        // Returned. For every other status we strip it entirely so the
+        // backend never validates a half-empty return object — the
+        // controller's `required_if:status,Returned` rule still enforces
+        // a real reason on the Returned path.
+        //
+        // NOTE: `form.transform()` returns undefined in @inertiajs/react —
+        // it must be called as its own statement, NOT chained before
+        // `.post()`. Chaining throws a TypeError and the request never
+        // fires (the modal appears to do nothing).
+        form.transform((payload) => {
+            if (payload.status !== 'Returned') {
+                const { return: _unused, ...rest } = payload;
+                return rest;
+            }
+            return payload;
+        });
         form.post(route('orders.change-status', order.id), {
             preserveScroll: true,
             onSuccess: () => {
@@ -79,6 +93,13 @@ export default function OrderShow({
             },
         });
     };
+
+    // Defence-in-depth: surface any `return.*` validation error even when
+    // the Return Details block is collapsed, so a status change can never
+    // fail "silently" again.
+    const hiddenReturnErrors = Object.entries(form.errors)
+        .filter(([key]) => key.startsWith('return.'))
+        .map(([, message]) => message);
 
     const openStatusModal = () => {
         form.setData('status', order.status);
@@ -353,6 +374,24 @@ export default function OrderShow({
                         {has_return && (
                             <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-500">
                                 This order already has a return record — the "Returned" status is no longer available from this menu.
+                            </p>
+                        )}
+
+                        {/* Explain the missing "Returned" option when the
+                            operator lacks returns.create — mirrors the hint
+                            on Orders/Edit so the omission is never silent. */}
+                        {!can_create_return && !has_return && (
+                            <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
+                                You do not have permission to create return records, so the <strong>Returned</strong> status option is hidden here.
+                            </p>
+                        )}
+
+                        {/* Defence-in-depth: if a return.* error ever comes back
+                            while the Return Details block is collapsed, show it
+                            here so the modal can never fail silently. */}
+                        {!isReturning && hiddenReturnErrors.length > 0 && (
+                            <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700">
+                                {hiddenReturnErrors.join(' ')}
                             </p>
                         )}
 
