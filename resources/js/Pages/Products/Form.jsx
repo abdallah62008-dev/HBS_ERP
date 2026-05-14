@@ -309,6 +309,14 @@ function QuickCategoryModal({ parents, onClose, onCreated }) {
 
     const submit = async (e) => {
         e.preventDefault();
+        // This modal's <form> is nested inside the product page's <form>
+        // (ProductForm renders inside <form onSubmit> on BOTH Products/Create
+        // and Products/Edit). `submit` events bubble — so without
+        // stopPropagation this event also reaches the outer product form's
+        // onSubmit, firing a spurious products.store request that re-renders
+        // the whole page and discards the just-created category. Stopping
+        // propagation here keeps the quick-add self-contained.
+        e.stopPropagation();
         setSubmitting(true);
         setErrors({});
         setGeneralError(null);

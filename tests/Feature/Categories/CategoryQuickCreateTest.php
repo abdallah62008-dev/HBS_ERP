@@ -185,4 +185,59 @@ class CategoryQuickCreateTest extends TestCase
             'user_id' => $this->admin->id,
         ]);
     }
+
+    public function test_missing_name_returns_json_validation_error(): void
+    {
+        $this->actingAs($this->admin);
+
+        $response = $this->postJson(route('categories.store'), [
+            'name' => '',
+            'parent_id' => null,
+            'status' => 'Active',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['name']);
+    }
+
+    public function test_non_json_request_still_redirects_to_categories_index(): void
+    {
+        // The SAME endpoint serves the /categories management page, which
+        // expects an Inertia redirect (NOT JSON). The quick-add modal's
+        // JSON branch must not regress that path.
+        $this->actingAs($this->admin);
+
+        $response = $this->post(route('categories.store'), [
+            'name' => 'Redirect Path Category',
+            'parent_id' => null,
+            'status' => 'Active',
+        ]);
+
+        $response->assertRedirect(route('categories.index'));
+        $response->assertSessionHas('success');
+        $this->assertDatabaseHas('categories', ['name' => 'Redirect Path Category']);
+    }
+
+    public function test_product_create_page_ships_categories_for_quick_add(): void
+    {
+        // The quick-add modal lives on Products/Create — that page must
+        // ship the `categories` prop the modal's dropdown is seeded from,
+        // otherwise the inline flow has nothing to append to.
+        $this->actingAs($this->admin);
+
+        Category::create([
+            'name' => 'Seeded For Product Page',
+            'parent_id' => null,
+            'status' => 'Active',
+            'created_by' => $this->admin->id,
+            'updated_by' => $this->admin->id,
+        ]);
+
+        $this->get(route('products.create'))
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page
+                ->component('Products/Create')
+                ->has('categories')
+            );
+    }
 }
