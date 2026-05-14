@@ -240,4 +240,67 @@ class CategoryQuickCreateTest extends TestCase
                 ->has('categories')
             );
     }
+
+    public function test_non_json_validation_failure_redirects_back_with_errors(): void
+    {
+        // The /categories management page (sidebar menu) submits via
+        // Inertia — a NON-JSON request. A validation failure on that
+        // path must redirect BACK with the errors flashed to the
+        // session so the page can render them inline; it must NOT
+        // return a JSON 422 (which Inertia cannot consume).
+        $this->actingAs($this->admin);
+
+        Category::create([
+            'name' => 'Existing Top Level',
+            'parent_id' => null,
+            'status' => 'Active',
+            'created_by' => $this->admin->id,
+            'updated_by' => $this->admin->id,
+        ]);
+
+        $response = $this->from(route('categories.index'))
+            ->post(route('categories.store'), [
+                'name' => 'Existing Top Level', // duplicate sibling → fails
+                'parent_id' => null,
+                'status' => 'Active',
+            ]);
+
+        $response->assertRedirect(route('categories.index'));
+        $response->assertSessionHasErrors(['name']);
+        $this->assertSame(1, Category::where('name', 'Existing Top Level')->count());
+    }
+
+    public function test_non_json_request_without_permission_is_forbidden(): void
+    {
+        // Mirror of the JSON 403 test for the Inertia (non-JSON) path the
+        // /categories page uses — a user lacking products.create cannot
+        // create a category from the management page either.
+        $role = Role::create([
+            'slug' => 'pcat-test-no-create-web',
+            'name' => 'No-Create Web Test',
+            'is_system' => false,
+            'description' => 'Test role with no products.create.',
+        ]);
+        $role->permissions()->attach(
+            Permission::where('slug', 'products.view')->firstOrFail()->id
+        );
+        $user = User::create([
+            'name' => 'Limited Web User',
+            'email' => 'limited-web@hbs.local',
+            'password' => Hash::make('LimitedPass1234'),
+            'role_id' => $role->id,
+            'status' => 'Active',
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($user);
+
+        $this->post(route('categories.store'), [
+            'name' => 'Web Should Fail',
+            'parent_id' => null,
+            'status' => 'Active',
+        ])->assertStatus(403);
+
+        $this->assertDatabaseMissing('categories', ['name' => 'Web Should Fail']);
+    }
 }
