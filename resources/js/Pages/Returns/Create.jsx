@@ -85,7 +85,13 @@ export default function ReturnCreate({
                                 </option>
                             ))}
                         </select>
-                        <p className="mt-1 text-[11px] text-slate-400">Only orders without an existing return are listed.</p>
+                        {(recent_orders ?? []).length === 0 ? (
+                            <p className="mt-1 text-[11px] text-amber-700">
+                                No eligible orders found. Every shipped/delivered/returned order either already has a return or isn't in a returnable status. Open an order directly and use <span className="font-mono">Change status → Returned</span>.
+                            </p>
+                        ) : (
+                            <p className="mt-1 text-[11px] text-slate-400">Only orders without an existing return are listed.</p>
+                        )}
                     </FormField>
                 )}
 
@@ -147,7 +153,7 @@ export default function ReturnCreate({
                 </FormField>
 
                 <div className="flex justify-end gap-2">
-                    <Link href={route('returns.index')} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">Cancel</Link>
+                    <Link href={route('returns.index')} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50">Cancel</Link>
                     <button type="submit" disabled={processing} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60">
                         {processing ? 'Opening…' : 'Open return'}
                     </button>
