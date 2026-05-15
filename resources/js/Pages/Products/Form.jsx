@@ -1,6 +1,5 @@
 import FormField from '@/Components/FormField';
 import useCan from '@/Hooks/useCan';
-import { usePage } from '@inertiajs/react';
 import { useState } from 'react';
 
 const VAT_DEFAULT = 14;
@@ -300,23 +299,27 @@ export default function ProductForm({ data, setData, errors, categories, markete
  * used in the Order Create page.
  */
 function QuickCategoryModal({ parents, onClose, onCreated }) {
-    const { props } = usePage();
     const [name, setName] = useState('');
     const [parentId, setParentId] = useState('');
     const [errors, setErrors] = useState({});
     const [submitting, setSubmitting] = useState(false);
     const [generalError, setGeneralError] = useState(null);
 
-    const submit = async (e) => {
-        e.preventDefault();
-        // This modal's <form> is nested inside the product page's <form>
-        // (ProductForm renders inside <form onSubmit> on BOTH Products/Create
-        // and Products/Edit). `submit` events bubble — so without
-        // stopPropagation this event also reaches the outer product form's
-        // onSubmit, firing a spurious products.store request that re-renders
-        // the whole page and discards the just-created category. Stopping
-        // propagation here keeps the quick-add self-contained.
-        e.stopPropagation();
+    // IMPORTANT — no inner `<form>` element on purpose. This modal is
+    // rendered INSIDE the product page's outer `<form>` (Products/Create
+    // and Products/Edit both wrap <ProductForm> in <form onSubmit>). A
+    // nested inner form makes the inner submit button's `button.form`
+    // resolve to the inner form, but `submit` events bubble and a
+    // `type="submit"` button inside the inner form would also fire the
+    // outer product form's `onSubmit` via that bubble. `stopPropagation`
+    // alone proved unreliable in practice. The structural fix: no inner
+    // form, no nested submit. The Save button is a plain `type="button"`
+    // wired to `onClick={submit}`. Enter-to-submit on the name input is
+    // implemented manually below via `onKeyDown`, with `preventDefault`
+    // to suppress the outer form's implicit Enter-submit.
+    const submit = async () => {
+        if (submitting) return;
+        if (!name.trim()) return;
         setSubmitting(true);
         setErrors({});
         setGeneralError(null);
@@ -368,6 +371,19 @@ function QuickCategoryModal({ parents, onClose, onCreated }) {
         }
     };
 
+    // Enter-to-submit on the name input. Without an inner <form>, the
+    // browser would otherwise route Enter to the OUTER product form's
+    // implicit submit, which would fire `products.store` instead of
+    // creating the category. preventDefault + stopPropagation suppress
+    // that and we explicitly call submit() to create the category.
+    const onInputKeyDown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            e.stopPropagation();
+            submit();
+        }
+    };
+
     return (
         <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
@@ -398,7 +414,9 @@ function QuickCategoryModal({ parents, onClose, onCreated }) {
                     </div>
                 )}
 
-                <form onSubmit={submit} className="space-y-3">
+                {/* NOTE: deliberately NOT a <form> — see the comment on
+                    `submit` above for the nested-form rationale. */}
+                <div className="space-y-3">
                     <div>
                         <label className="mb-1 block text-xs font-medium text-slate-600">Name <span className="text-red-500">*</span></label>
                         <input
@@ -406,8 +424,8 @@ function QuickCategoryModal({ parents, onClose, onCreated }) {
                             autoFocus
                             value={name}
                             onChange={(e) => setName(e.target.value)}
+                            onKeyDown={onInputKeyDown}
                             className="block w-full rounded-md border-slate-300 text-sm"
-                            required
                             maxLength={255}
                         />
                         {errors.name && <p className="mt-1 text-xs text-red-600">{Array.isArray(errors.name) ? errors.name[0] : errors.name}</p>}
@@ -439,14 +457,15 @@ function QuickCategoryModal({ parents, onClose, onCreated }) {
                             Cancel
                         </button>
                         <button
-                            type="submit"
+                            type="button"
+                            onClick={submit}
                             disabled={submitting || !name.trim()}
                             className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-60"
                         >
                             {submitting ? 'Saving…' : 'Save category'}
                         </button>
                     </div>
-                </form>
+                </div>
             </div>
         </div>
     );
