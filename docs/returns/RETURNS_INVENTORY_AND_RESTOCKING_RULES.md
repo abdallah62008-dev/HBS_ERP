@@ -1,33 +1,37 @@
 # Returns — Inventory & Restocking Rules
 
 > **Companion to:** [RETURNS_LIFECYCLE_AND_STATUSES.md](RETURNS_LIFECYCLE_AND_STATUSES.md) · [RETURNS_ERP_WORKFLOW_ROADMAP.md](RETURNS_ERP_WORKFLOW_ROADMAP.md) (Phase 4)
-> **Purpose:** Document the current inventory side-effects of the Returns lifecycle, the alternative model, the trade-offs, and the recommendation.
+> **Purpose:** Document the current inventory side-effects of the Returns lifecycle.
 >
 > ⚠️ **This module crosses into Inventory.** Any change here is a Phase 4 change and **needs explicit business approval.**
+>
+> 📌 **Phase 4B shipped (commit pending review)** — switched from optimistic-restock-on-Returned to restock-after-good-inspection. The pre-Phase-4B "current behaviour" sections below describe the **historical** model; the live behaviour is described in §1 and §12.
 
 ---
 
-## 1. Current as-built behaviour
+## 1. Current as-built behaviour (Phase 4B policy)
 
 | Step | Inventory side-effect |
 |---|---|
 | `ReturnService::open()` — return record created (`Pending`) | **None.** Creating the return row does not touch inventory. |
-| `OrderService::changeStatus($order, 'Returned')` for a **post-ship** order (Shipped / Out for Delivery / Delivered → Returned) | **Writes one `inventory_movement` row per item.** `movement_type = 'Return To Stock'`, `quantity = +item.quantity`, `reference_type = Order::class`, `reference_id = order.id`. This is the *optimistic restock*. |
+| `OrderService::changeStatus($order, 'Returned')` for a **post-ship** order (Shipped / Out for Delivery / Delivered → Returned) | **None.** Stock is NOT optimistically restored. On-hand stays at the post-Ship level until inspection. *(Phase 4B change: previously wrote `+qty Return To Stock` referenced to the Order.)* |
 | `OrderService::changeStatus($order, 'Returned')` for a **pre-ship** order | **None.** Pre-ship → Returned writes nothing — there is no on-hand to restore. |
-| `ReturnService::inspect($return, 'Good', restockable: true)` | **None.** The optimistic +qty stands. (The "no-op" branch in `inspect()` is the success case.) |
-| `ReturnService::inspect($return, anything-else)` | **Writes one `inventory_movement` per item.** `movement_type = 'Return To Stock'`, `quantity = -item.quantity`, `reference_type = OrderReturn::class`, `reference_id = return.id`. This **reverses** the optimistic restock. The note says `"Reversal — return inspected as <condition>"`. |
+| `ReturnService::markReceived()` *(Phase 3)* | **None.** Pure lifecycle marker. |
+| `ReturnService::inspect($return, 'Good', restockable: true)` | **Writes one `inventory_movement` per item.** `movement_type = 'Return To Stock'`, `quantity = +item.quantity`, `reference_type = OrderReturn::class`, `reference_id = return.id`. Notes: *"Return inspected as Good — restocked"*. **This is the single legitimate moment a return restocks stock.** |
+| `ReturnService::inspect($return, anything-else)` (Damaged / Missing Parts / Unknown / restockable=false) | **None.** The Ship -qty stays as the write-off baseline. *(Phase 4B change: previously wrote a `-qty Return To Stock` reversal of the optimistic +qty; there is no optimistic +qty to reverse under the new policy.)* |
 | `ReturnService::close()` | **None.** Closure writes no inventory rows. |
 | `ReturnService::updateDetails()` (refund_amount / shipping_loss / notes edit) | **None.** Limited details edit is finance-intent only. |
 
-### Concrete walkthrough — order with 3 units of one SKU
+### Concrete walkthrough — order with 3 units of one SKU (Phase 4B)
 
 ```
 Order placed                             on_hand: 100  reserved: 0
 Order → Confirmed                        on_hand: 100  reserved: 3   (reserve movement)
 Order → Shipped                          on_hand:  97  reserved: 0   (ship movement: -3, releases reservation)
 Order → Delivered                        on_hand:  97  reserved: 0   (no movement)
-Order → Returned                         on_hand: 100  reserved: 0   (optimistic Return To Stock: +3)
-ReturnService::inspect Good+restockable  on_hand: 100  reserved: 0   (no-op; the +3 stays)
+Order → Returned                         on_hand:  97  reserved: 0   (NO movement — stays at post-Ship)
+ReturnService::markReceived              on_hand:  97  reserved: 0   (no-op)
+ReturnService::inspect Good+restockable  on_hand: 100  reserved: 0   (+3 Return To Stock written here)
 ReturnService::close                     on_hand: 100  reserved: 0   (no-op)
 ```
 
@@ -35,18 +39,21 @@ vs. the same order inspected as Damaged:
 
 ```
 Order placed                             on_hand: 100  reserved: 0
-… same up to Returned …                  on_hand: 100  reserved: 0
-ReturnService::inspect Damaged           on_hand:  97  reserved: 0   (reversal: -3, cancels the optimistic +3)
+… same up to Returned …                  on_hand:  97  reserved: 0
+ReturnService::markReceived              on_hand:  97  reserved: 0   (no-op)
+ReturnService::inspect Damaged           on_hand:  97  reserved: 0   (NO movement — Ship -3 is the write-off)
 ReturnService::close                     on_hand:  97  reserved: 0   (no-op)
 ```
 
-The net on-hand correctly reflects reality at every step **after** inspection. The window in which on-hand is *wrong* is the gap between `Order → Returned` and the inspection verdict.
+**The on-hand is now accurate at every step** — including during the receive-and-inspect window. The only legitimate moment a return restocks goods is `inspect(Good, restockable=true)`.
 
 ---
 
-## 2. Why "optimistic restock"?
+## 2. Pre-Phase-4B: Why "optimistic restock"? *(historical)*
 
-The current model writes the restock movement *immediately* when the operator marks the order Returned, before any physical inspection. The rationale (encoded in the comment on `OrderService::applyInventoryForTransition`):
+> 📌 The section below describes the **pre-Phase-4B** rationale for reference. The live model is described in §1. See §12 for the migration record.
+
+The historical model wrote the restock movement *immediately* when the operator marked the order Returned, before any physical inspection. The rationale (then encoded in the comment on `OrderService::applyInventoryForTransition`):
 
 > *"Write the optimistic Return To Stock movement so on-hand reflects goods back in the warehouse. ReturnService::inspect later either keeps this (Good+restockable) or reverses it (Damaged)."*
 
@@ -235,3 +242,69 @@ Phase 4 (the real implementation phase) is **blocked** on operations answering:
 
 - Added `tests/Feature/Returns/ReturnInventoryTest::test_closing_return_does_not_create_inventory_movement` — pinning that `close()` writes zero inventory rows. Pure regression test; no production code touched.
 - This document — appended this section. Restocking rules above §11 are unchanged.
+
+---
+
+## 12. Phase 4B as-shipped — restock-after-good-inspection
+
+**Date shipped:** following commit `03d19d4` (Phase 4A audit).
+
+### Business decision applied
+
+The audit questions from §11 were answered by operations as follows:
+
+| Question | Answer |
+|---|---|
+| Q1 — Avg elapsed time Returned → Inspection | **~1 day** |
+| Q3 — Damage / not-restockable rate | **~5%** |
+| Q5 — Has oversell ever happened? | **Yes, may have** |
+| Q8 — Should returned stock be sellable before inspection? | **No** |
+
+A ~1-day inflation window combined with confirmed (or suspected) over-sell incidents made Option B from the §5 trade-off unambiguous. Stock now comes back only after a physical inspector verdicts the goods Good + restockable.
+
+### Final policy (live)
+
+| Trigger | Inventory effect | Notes |
+|---|---|---|
+| Order → Returned (any origin) | **None** | Inflation window eliminated. The Ship -qty stays. |
+| markReceived() | **None** | Phase 3 marker — unchanged. |
+| inspect(Good, restockable=true) | **+qty Return To Stock** | Single source of return-related restock. `reference_type=OrderReturn`. |
+| inspect(Damaged \| Missing Parts \| Unknown) OR restockable=false | **None** | Ship -qty is the write-off baseline; no reversal needed (nothing to reverse). |
+| close() | **None** | Lifecycle marker. |
+| updateDetails() | **None** | Finance-intent edit. |
+
+### Code change footprint
+
+| File | Change |
+|---|---|
+| `app/Services/OrderService.php` | Removed the post-ship → Returned `returnToStock` branch from `applyInventoryForTransition`. Comment block updated to document the new policy. |
+| `app/Services/ReturnService.php::inspect()` | Inverted the inventory branch: Good + restockable now writes `+qty` (was: no-op). Any other verdict now writes nothing (was: `-qty` reversal). Class docblock updated. |
+| `tests/Feature/Returns/ReturnInventoryTest.php` | 4 existing tests rewritten + 1 new test added (`missing_parts_or_not_restockable_inspection_writes_no_inventory_movement`). |
+| `tests/Feature/Returns/ReturnInspectionWorkflowTest.php` | 2 inventory-asserting tests rewritten for the new policy. |
+| `tests/Feature/Orders/ReturnFromStatusChangeTest.php` | 1 inventory test rewritten (renamed to `test_returned_no_longer_writes_optimistic_return_to_stock`). |
+
+### What this MUST NOT regress (anti-rules)
+
+- **Pre-ship → Returned must still write nothing.** Already pinned.
+- **Damaged inspection must write zero rows.** Specifically: no `+qty Return To Stock`, no `-qty Return To Stock` reversal, no `Return Damaged` row. The damage is captured by `product_condition` + `return_status` only.
+- **Good inspection must write exactly ONE row per item.** Reference is the OrderReturn, not the Order.
+- **markReceived() and close() must remain inventory no-ops.**
+
+### Rollback
+
+If a production over-sell or stuck-stock incident traces to Phase 4B, the rollback is purely revert the commit. The change is contained to two service methods + their test files. No migration to undo. No data fix required — any returns inspected as Good under the new policy already have their `+qty Return To Stock` referenced to the OrderReturn, and a revert would leave that intact (the old code wrote the `+qty` referenced to the Order at status-change time; both forms produce the correct on-hand sum, the difference is purely the reference linkage).
+
+### Tests pinning the new policy (Phase 4B)
+
+| Test | Rule pinned |
+|---|---|
+| `ReturnInventoryTest::test_delivered_to_returned_does_not_write_return_to_stock` | Post-ship → Returned writes zero `Return To Stock` rows |
+| `ReturnInventoryTest::test_pre_ship_to_returned_still_does_not_phantom_restock` | Pre-ship → Returned writes zero rows (unchanged) |
+| `ReturnInventoryTest::test_good_restockable_inspection_writes_return_to_stock` | `inspect(Good, true)` writes one `+qty` referenced to OrderReturn |
+| `ReturnInventoryTest::test_damaged_inspection_writes_no_inventory_movement` | `inspect(Damaged, false)` writes zero rows; on-hand stays at post-Ship |
+| `ReturnInventoryTest::test_missing_parts_or_not_restockable_inspection_writes_no_inventory_movement` | Missing Parts / Unknown / Good+restockable=false all write zero rows |
+| `ReturnInventoryTest::test_closing_return_does_not_create_inventory_movement` | `close()` writes zero rows (Phase 4A pin, still valid) |
+| `ReturnInspectionWorkflowTest::test_inspect_from_received_good_writes_return_to_stock` | Good after Received writes one `+qty` |
+| `ReturnInspectionWorkflowTest::test_inspect_from_received_damaged_writes_no_inventory_movement` | Damaged after Received writes zero rows |
+| `ReturnInspectionWorkflowTest::test_mark_received_does_not_create_inventory_movement` | `markReceived()` writes zero rows (Phase 3 pin) |
+| `ReturnFromStatusChangeTest::test_returned_no_longer_writes_optimistic_return_to_stock` | The atomic flow (HTTP route) also writes zero `Return To Stock` on Returned |

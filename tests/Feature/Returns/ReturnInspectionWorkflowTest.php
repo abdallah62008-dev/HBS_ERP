@@ -217,28 +217,40 @@ class ReturnInspectionWorkflowTest extends TestCase
         $this->assertSame(0, CashboxTransaction::where('source_type', 'refund')->count());
     }
 
-    /* ────────────────────── 5. Inspect from Received still writes correct inventory ────────────────────── */
+    /* ────────────────────── 5. Inspect from Received writes correct inventory (Phase 4B policy) ────────────────────── */
 
-    public function test_inspect_from_received_path_still_writes_correct_inventory_on_damaged(): void
+    public function test_inspect_from_received_damaged_writes_no_inventory_movement(): void
     {
-        // Build an order with one shipped → returned cycle so the optimistic
-        // +qty is already on the books. Then march Pending → Received → inspect(Damaged).
+        // Phase 4B policy: Order → Returned writes nothing, Receive writes
+        // nothing, Damaged inspection writes nothing. The Ship -qty stays
+        // as the write-off baseline.
         $order = $this->makeShippedThenReturnedOrder(quantity: 3);
         $return = OrderReturn::where('order_id', $order->id)->firstOrFail();
         $this->assertSame('Pending', $return->return_status);
 
-        // The optimistic +3 written at order-status-→-Returned.
-        $optimisticPlus = InventoryMovement::where('reference_type', Order::class)
-            ->where('reference_id', $order->id)
-            ->where('movement_type', 'Return To Stock')
-            ->sum('quantity');
-        $this->assertSame(3, (int) $optimisticPlus);
+        // Pre-condition: NO return-related movements exist yet. The Ship
+        // -qty referenced to the order is the only relevant movement.
+        $returnRelatedBefore = InventoryMovement::where('movement_type', 'Return To Stock')
+            ->where(function ($q) use ($order, $return) {
+                $q->where(function ($q) use ($order) {
+                    $q->where('reference_type', Order::class)
+                        ->where('reference_id', $order->id);
+                })->orWhere(function ($q) use ($return) {
+                    $q->where('reference_type', OrderReturn::class)
+                        ->where('reference_id', $return->id);
+                });
+            })
+            ->count();
+        $this->assertSame(0, $returnRelatedBefore,
+            'Phase 4B: no Return To Stock movements should exist before inspection.');
 
         // Pending → Received.
         $this->actingAs($this->admin)
             ->post('/returns/' . $return->id . '/receive')
             ->assertRedirect();
         $this->assertSame('Received', $return->fresh()->return_status);
+
+        $movementsAtReceived = InventoryMovement::count();
 
         // Received → Inspect (Damaged, not restockable).
         $this->actingAs($this->admin)
@@ -249,25 +261,23 @@ class ReturnInspectionWorkflowTest extends TestCase
             ->assertRedirect();
 
         $this->assertSame('Damaged', $return->fresh()->return_status);
-
-        // Reversal -3 written referenced to the return.
-        $reversal = InventoryMovement::where('reference_type', OrderReturn::class)
-            ->where('reference_id', $return->id)
-            ->where('movement_type', 'Return To Stock')
-            ->sum('quantity');
-        $this->assertSame(-3, (int) $reversal,
-            'Inspect-from-Received must still write the reversal exactly like inspect-from-Pending.');
+        $this->assertSame($movementsAtReceived, InventoryMovement::count(),
+            'Phase 4B: Damaged inspection from the Received path MUST write zero inventory rows.');
     }
 
-    public function test_inspect_from_received_path_writes_no_extra_movement_on_good_restockable(): void
+    public function test_inspect_from_received_good_writes_return_to_stock(): void
     {
+        // Phase 4B policy: the +qty is written by inspect(Good, restockable=true),
+        // referenced to the OrderReturn. This is the single legitimate
+        // moment a return-related restock happens.
         $order = $this->makeShippedThenReturnedOrder(quantity: 3);
         $return = OrderReturn::where('order_id', $order->id)->firstOrFail();
-        $movementsBefore = InventoryMovement::count();
 
         $this->actingAs($this->admin)
             ->post('/returns/' . $return->id . '/receive')
             ->assertRedirect();
+        $movementsAtReceived = InventoryMovement::count();
+
         $this->actingAs($this->admin)
             ->post('/returns/' . $return->id . '/inspect', [
                 'product_condition' => 'Good',
@@ -276,8 +286,15 @@ class ReturnInspectionWorkflowTest extends TestCase
             ->assertRedirect();
 
         $this->assertSame('Restocked', $return->fresh()->return_status);
-        $this->assertSame($movementsBefore, InventoryMovement::count(),
-            'Good + restockable from the Received path must write no further movement — the optimistic +qty stands.');
+        $this->assertSame($movementsAtReceived + 1, InventoryMovement::count(),
+            'Phase 4B: Good + restockable from the Received path MUST write exactly ONE +qty Return To Stock.');
+
+        $rts = InventoryMovement::where('movement_type', 'Return To Stock')
+            ->where('reference_type', OrderReturn::class)
+            ->where('reference_id', $return->id)
+            ->first();
+        $this->assertNotNull($rts);
+        $this->assertSame(3, (int) $rts->quantity);
     }
 
     /* ────────────────────── 6. Legacy fast-path still works ────────────────────── */

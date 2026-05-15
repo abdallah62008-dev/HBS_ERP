@@ -21,14 +21,24 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 /**
- * Regression coverage for the two High-severity bugs surfaced by UAT:
+ * Inventory side-effects for returns under the Phase 4B policy:
+ * restock-after-good-inspection.
  *
- *   A. Delivered → Returned must write the optimistic Return To Stock
- *      movement (previously gated to oldStatus === 'Shipped').
+ * Pinned invariants:
+ *   - `Order → Returned` writes NO inventory movement (optimistic +qty
+ *     removed in Phase 4B). True for both pre-ship and post-ship origins.
+ *   - `ReturnService::inspect('Good', restockable=true)` writes ONE +qty
+ *     `Return To Stock` per item, referenced to the OrderReturn.
+ *   - Any other inspection verdict (Damaged / Missing Parts / Unknown / or
+ *     restockable=false) writes NOTHING. The Ship -qty stays as the
+ *     write-off baseline.
+ *   - `markReceived()` and `close()` write nothing.
  *
- *   B. Damaged-return inspection must NOT double-decrement on-hand
- *      (previously wrote both a Return To Stock reversal AND a
- *      Return Damaged -qty, totalling -2*qty against on-hand).
+ * The previous optimistic-restock model and its `-qty` reversal on Damaged
+ * are no longer in the codebase. Tests previously named `bug_a_*` and
+ * `bug_b_*` referred to UAT bugs against that old model; under the new
+ * policy the same scenarios produce different (correct) outcomes and
+ * have been renamed.
  */
 class ReturnInventoryTest extends TestCase
 {
@@ -94,35 +104,41 @@ class ReturnInventoryTest extends TestCase
         );
     }
 
-    public function test_bug_a_delivered_to_returned_writes_return_to_stock(): void
+    public function test_delivered_to_returned_does_not_write_return_to_stock(): void
     {
+        // Phase 4B policy — the post-ship → Returned transition no longer
+        // writes the optimistic +qty. On-hand stays at the post-Ship level
+        // until inspection happens.
         $order = $this->placeOrderQty(2);
         $this->orderService->changeStatus($order, 'Confirmed');
         $this->satisfyShippingChecklist($order);
         $this->orderService->changeStatus($order->fresh(), 'Shipped');
         $this->orderService->changeStatus($order, 'Delivered');
 
-        $this->assertSame(98, $this->inventory->onHandStock($this->product->id, null));
+        $this->assertSame(98, $this->inventory->onHandStock($this->product->id, null),
+            'Pre-condition: post-ship on-hand is 100 − 2 = 98.');
 
         $this->orderService->changeStatus($order->fresh(), 'Returned');
 
-        $returnToStock = InventoryMovement::query()
+        $rts = InventoryMovement::query()
             ->where('product_id', $this->product->id)
             ->where('movement_type', 'Return To Stock')
             ->where('reference_type', Order::class)
             ->where('reference_id', $order->id)
-            ->first();
+            ->count();
 
-        $this->assertNotNull($returnToStock, 'Optimistic Return To Stock movement must be written for Delivered → Returned.');
-        $this->assertSame(2, (int) $returnToStock->quantity);
-        $this->assertSame(100, $this->inventory->onHandStock($this->product->id, null));
+        $this->assertSame(0, $rts,
+            'Phase 4B: Delivered → Returned MUST NOT write the optimistic Return To Stock movement.');
+        $this->assertSame(98, $this->inventory->onHandStock($this->product->id, null),
+            'On-hand must stay at the post-Ship level until inspection decides the verdict.');
     }
 
-    public function test_bug_a_pre_ship_to_returned_does_not_phantom_restock(): void
+    public function test_pre_ship_to_returned_still_does_not_phantom_restock(): void
     {
+        // Behaviour unchanged from Phase 4A: pre-ship → Returned has no
+        // on-hand to restore and writes nothing.
         $order = $this->placeOrderQty(2);
         $this->orderService->changeStatus($order, 'Confirmed');
-        // Stock has been reserved but never shipped.
         $this->assertSame(100, $this->inventory->onHandStock($this->product->id, null));
         $this->assertSame(2, $this->inventory->reservedQuantity($this->product->id, null));
 
@@ -137,14 +153,19 @@ class ReturnInventoryTest extends TestCase
         $this->assertSame(100, $this->inventory->onHandStock($this->product->id, null));
     }
 
-    public function test_good_return_inspection_restores_full_on_hand(): void
+    public function test_good_restockable_inspection_writes_return_to_stock(): void
     {
+        // Phase 4B — the +qty is now written by inspect(), not by the
+        // status transition. The movement's reference is the OrderReturn.
         $order = $this->placeOrderQty(2);
         $this->orderService->changeStatus($order, 'Confirmed');
         $this->satisfyShippingChecklist($order);
         $this->orderService->changeStatus($order->fresh(), 'Shipped');
         $this->orderService->changeStatus($order, 'Delivered');
         $this->orderService->changeStatus($order->fresh(), 'Returned');
+
+        // Before inspection: on-hand is still the post-Ship level.
+        $this->assertSame(98, $this->inventory->onHandStock($this->product->id, null));
 
         $return = OrderReturn::create([
             'order_id' => $order->id,
@@ -166,11 +187,23 @@ class ReturnInventoryTest extends TestCase
             notes: 'OK to resell',
         );
 
+        // After Good + restockable inspection: stock is restored.
         $this->assertSame('Restocked', $return->fresh()->return_status);
         $this->assertSame(100, $this->inventory->onHandStock($this->product->id, null));
+
+        $rts = InventoryMovement::query()
+            ->where('product_id', $this->product->id)
+            ->where('movement_type', 'Return To Stock')
+            ->where('reference_type', OrderReturn::class)
+            ->where('reference_id', $return->id)
+            ->first();
+
+        $this->assertNotNull($rts,
+            'Good + restockable inspection MUST write a +qty Return To Stock referenced to the OrderReturn.');
+        $this->assertSame(2, (int) $rts->quantity);
     }
 
-    public function test_bug_b_damaged_return_does_not_double_decrement(): void
+    public function test_damaged_inspection_writes_no_inventory_movement(): void
     {
         $order = $this->placeOrderQty(3);
         $this->orderService->changeStatus($order, 'Confirmed');
@@ -179,7 +212,8 @@ class ReturnInventoryTest extends TestCase
         $this->assertSame(97, $this->inventory->onHandStock($this->product->id, null));
 
         $this->orderService->changeStatus($order->fresh(), 'Returned');
-        $this->assertSame(100, $this->inventory->onHandStock($this->product->id, null));
+        // Phase 4B: Returned no longer +3s on-hand. Stays at 97.
+        $this->assertSame(97, $this->inventory->onHandStock($this->product->id, null));
 
         $return = OrderReturn::create([
             'order_id' => $order->id,
@@ -193,6 +227,8 @@ class ReturnInventoryTest extends TestCase
             'created_by' => $this->admin->id,
         ]);
 
+        $movementsBefore = InventoryMovement::count();
+
         $this->returnService->inspect(
             return: $return,
             condition: 'Damaged',
@@ -202,8 +238,9 @@ class ReturnInventoryTest extends TestCase
         );
 
         $this->assertSame('Damaged', $return->fresh()->return_status);
-        // Net effect: ship -3 and the optimistic +3 reversal = -3 total,
-        // matching real-world stock state. NOT -6.
+        $this->assertSame($movementsBefore, InventoryMovement::count(),
+            'Phase 4B: Damaged inspection MUST write zero inventory rows — there is no phantom +qty to reverse.');
+        // On-hand reflects the Ship -3 only; the damaged goods are written off.
         $this->assertSame(97, $this->inventory->onHandStock($this->product->id, null));
 
         $damagedMovements = InventoryMovement::query()
@@ -212,6 +249,55 @@ class ReturnInventoryTest extends TestCase
             ->count();
 
         $this->assertSame(0, $damagedMovements, 'No Return Damaged inventory movement should be written; the returns row carries the audit signal.');
+    }
+
+    public function test_missing_parts_or_not_restockable_inspection_writes_no_inventory_movement(): void
+    {
+        // Two non-Good verdicts in one test: 'Missing Parts' (a non-Good
+        // condition) and 'Good' + restockable=false (Good condition but
+        // operator explicitly says "don't restock"). Both must produce
+        // zero inventory rows under the new policy.
+        foreach ([
+            ['condition' => 'Missing Parts', 'restockable' => true, 'note' => 'Missing accessories'],
+            ['condition' => 'Unknown', 'restockable' => true, 'note' => 'Could not verify'],
+            ['condition' => 'Good', 'restockable' => false, 'note' => 'Good but operator overrode'],
+        ] as $verdict) {
+            $order = $this->placeOrderQty(1);
+            $this->orderService->changeStatus($order, 'Confirmed');
+            $this->satisfyShippingChecklist($order);
+            $this->orderService->changeStatus($order->fresh(), 'Shipped');
+            $this->orderService->changeStatus($order->fresh(), 'Delivered');
+            $this->orderService->changeStatus($order->fresh(), 'Returned');
+
+            $return = OrderReturn::create([
+                'order_id' => $order->id,
+                'customer_id' => $order->customer_id,
+                'return_reason_id' => ReturnReason::firstOrFail()->id,
+                'return_status' => 'Pending',
+                'product_condition' => 'Unknown',
+                'refund_amount' => 0,
+                'shipping_loss_amount' => 0,
+                'restockable' => false,
+                'created_by' => $this->admin->id,
+            ]);
+
+            $movementsBefore = InventoryMovement::count();
+
+            $this->returnService->inspect(
+                return: $return,
+                condition: $verdict['condition'],
+                restockable: $verdict['restockable'],
+                refundAmount: 0,
+                notes: $verdict['note'],
+            );
+
+            $this->assertSame(
+                $movementsBefore,
+                InventoryMovement::count(),
+                "Verdict ({$verdict['condition']}, restockable=" . ($verdict['restockable'] ? 'true' : 'false')
+                . ') must write zero inventory rows under Phase 4B.'
+            );
+        }
     }
 
     public function test_bug_c_change_status_returns_flash_error_not_500(): void

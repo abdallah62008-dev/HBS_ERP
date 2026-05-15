@@ -28,13 +28,19 @@ use RuntimeException;
  * inspect on the spot keep the fast path. Behaviour after inspect() is
  * identical on both paths.
  *
- * Key effects:
+ * Key effects (Phase 4B inventory policy — restock-after-good-inspection):
  *   - markReceived(): NO inventory / refund / cashbox effect.
  *     Pure lifecycle marker.
- *   - inspect(): records condition, decides restockable, stamps inspector,
- *     and either KEEPS the order's prior `Return To Stock` movement
- *     (Good + restockable) or REVERSES it (any other verdict). Writes the
- *     inventory_movement reversal row referenced to the OrderReturn.
+ *   - inspect(): records condition, decides restockable, stamps inspector.
+ *     Inventory effect (single source of truth for return-restock):
+ *       Good + restockable=true   → write +qty `Return To Stock`,
+ *                                   referenced to the OrderReturn
+ *       any other verdict         → write nothing — the Ship -qty stays
+ *                                   as the write-off baseline.
+ *   - The optimistic +qty previously written at `Order → Returned` was
+ *     removed in Phase 4B. Stock now comes back only after physical
+ *     inspection, eliminating the inflation window that could allow
+ *     over-selling returned-but-not-yet-verified goods.
  *
  * The cancel-marketer-profit and update-customer-risk steps from the
  * spec land in Phase 5 (marketer wallet) and Phase 6 (smart alerts).
@@ -83,10 +89,23 @@ class ReturnService
 
     /**
      * Inspect a return: classifies the goods and applies the correct
-     * inventory movement. If the order was already moved to `Returned`
-     * via OrderService, that wrote a `Return To Stock` movement
-     * optimistically — when the inspector decides "Damaged", we have to
-     * reverse it so on-hand reflects reality.
+     * inventory movement.
+     *
+     * Phase 4B inventory policy:
+     *   - `Order → Returned` writes NO inventory movement (the optimistic
+     *     restock was removed in this phase).
+     *   - This method is now the SINGLE source of return-related inventory
+     *     movements:
+     *       Good + restockable=true   → write +qty `Return To Stock`
+     *       any other verdict         → write nothing (the Ship -qty stays
+     *                                   as the write-off baseline)
+     *
+     * Why no reversal on Damaged: the goods were already removed from
+     * sellable on-hand by the original Ship -qty. Under the old optimistic
+     * model we had to reverse a phantom +qty written at status-change time;
+     * under Phase 4B there is no phantom to reverse. The damage is captured
+     * by `product_condition='Damaged'` + `return_status='Damaged'` and the
+     * audit_logs entry.
      */
     public function inspect(
         OrderReturn $return,
@@ -113,34 +132,24 @@ class ReturnService
                 throw new RuntimeException('No active warehouse configured.');
             }
 
-            // OrderService wrote an optimistic Return To Stock on the
-            // post-ship → Returned transition. The inspection verdict
-            // either keeps it (Good + restockable) or reverses it (Damaged
-            // / Missing Parts / Unknown / non-restockable).
-            //
-            // We deliberately do NOT also write a Return Damaged movement.
-            // The original Ship -qty already removed the goods from
-            // sellable on-hand; a separate Return Damaged -qty would
-            // double-decrement. The damage write-off is captured by the
-            // returns row (product_condition='Damaged', return_status='Damaged')
-            // and the audit_logs entry — no additional inventory_movements
-            // row is required for that.
-            foreach ($order->items as $item) {
-                if ($condition === 'Good' && $restockable) {
-                    // Optimistic Return To Stock stays — nothing to record.
-                    continue;
-                }
+            // Phase 4B — inventory comes back ONLY at Good + restockable.
+            // Every other verdict writes nothing. See method docblock for
+            // the full rationale.
+            $shouldRestock = $condition === 'Good' && $restockable;
 
-                $this->inventory->record(
-                    productId: $item->product_id,
-                    variantId: $item->product_variant_id,
-                    warehouseId: $warehouse->id,
-                    movementType: 'Return To Stock',
-                    signedQuantity: -(int) $item->quantity,
-                    referenceType: OrderReturn::class,
-                    referenceId: $return->id,
-                    notes: 'Reversal — return inspected as ' . $condition,
-                );
+            if ($shouldRestock) {
+                foreach ($order->items as $item) {
+                    $this->inventory->record(
+                        productId: $item->product_id,
+                        variantId: $item->product_variant_id,
+                        warehouseId: $warehouse->id,
+                        movementType: 'Return To Stock',
+                        signedQuantity: (int) $item->quantity,
+                        referenceType: OrderReturn::class,
+                        referenceId: $return->id,
+                        notes: 'Return inspected as Good — restocked',
+                    );
+                }
             }
 
             $return->forceFill([

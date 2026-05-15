@@ -303,17 +303,20 @@ class OrderService
                 continue;
             }
 
-            // (Shipped|Out for Delivery|Delivered) → Returned: write the
-            // optimistic Return To Stock movement so on-hand reflects goods
-            // back in the warehouse. ReturnService::inspect later either
-            // keeps this (Good+restockable) or reverses it (Damaged).
-            // Returned from any pre-ship status has no on-hand to restore —
-            // skip silently rather than write a phantom +qty.
-            $postShipStatuses = ['Shipped', 'Out for Delivery', 'Delivered'];
-            if ($newStatus === 'Returned' && in_array($oldStatus, $postShipStatuses, true)) {
-                $this->inventory->returnToStock(...$args, notes: "Order {$order->order_number} returned");
-                continue;
-            }
+            // Phase 4B — `Order → Returned` writes NO inventory movement.
+            //
+            // Stock is restored only when `ReturnService::inspect()` verdicts
+            // the goods as Good + restockable. This eliminates the optimistic-
+            // restock inflation window (typically ~1 day between Returned and
+            // inspection) that could allow over-selling returned-but-not-yet-
+            // inspected stock. Damaged / Missing / Unknown inspections write
+            // nothing too — the Ship -qty stays as the write-off, captured by
+            // the returns row (`product_condition` + `return_status`).
+            //
+            // No-op for pre-ship → Returned (there was never an on-hand to
+            // restore) AND for post-ship → Returned (the inspection is the
+            // legitimising action). The single source of truth for return-
+            // related inventory movements is now `ReturnService::inspect()`.
         }
     }
 

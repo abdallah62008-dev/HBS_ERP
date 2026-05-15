@@ -108,18 +108,25 @@ Each phase below is **independently shippable**. Phase 0 is documentation only; 
 | **Commit strategy** | One focused commit per option: `Move return restock from status-change to inspection` (Option B). Single revertable unit. |
 | **Go / no-go** | **Needs explicit business approval** before any code is written. Specifically: is the operational risk of stock-inflation-between-status-change-and-inspection worse than the operational risk of stock-being-unavailable-until-inspection-completes? |
 | **Decision needed** | See "Open question 4" below. |
-| **Status** | 🟡 **Phase 4A — Audit complete; behaviour unchanged.** Phase 4B (the real implementation) is **blocked** on operations answering Q1, Q3, Q5 from `RETURNS_INVENTORY_AND_RESTOCKING_RULES.md §11`. |
+| **Status** | ✅ **Phase 4B shipped — restock-after-good-inspection.** Operations answered Q1 (~1 day), Q3 (~5%), Q5 (yes), Q8 (returned stock not sellable before inspection) → Option B implemented. Phase 4A audit pins preserved as historical context. |
 
 ### Phase 4A — as-shipped notes (audit only, no behaviour change)
 
-- **No production code modified.** The current optimistic-restock model is the documented behaviour and remains in force.
-- **One test added** to close a coverage gap: `ReturnInventoryTest::test_closing_return_does_not_create_inventory_movement` pins that `close()` writes zero inventory rows. Without this regression test, a future coupling of close() to inventory would slip past every existing test.
-- **Decision documented in §11 of the inventory rules doc.** Phase 4B cannot be approved without answers to questions Q1 (Returned-to-inspected elapsed time), Q3 (damage rate), Q5 (real over-sell incidents). Phase 3's Received checkpoint just shipped — start collecting timestamp data from now.
-- **Anti-rules** (do NOT do these) recorded in the doc:
-  - Partial migration (change `OrderService` without changing `ReturnService::inspect` in lockstep)
-  - Adding an `expected_return` movement type without explicit buy-in (Option C)
-  - Bundling Phase 4 with any other Returns release
+- **No production code modified.** Phase 4A documented the optimistic-restock model as it was before Phase 4B.
+- **One test added** to close a coverage gap: `ReturnInventoryTest::test_closing_return_does_not_create_inventory_movement` pins that `close()` writes zero inventory rows.
+- **Anti-rules** (do NOT do these) recorded in the doc — these still apply going forward:
+  - Adding an `expected_return` movement type without explicit buy-in (Option C remains out of scope)
+  - Bundling future inventory changes with any other Returns release
   - Adding a per-return UI toggle for restock timing
+
+### Phase 4B — as-shipped notes (the policy switch)
+
+- **Atomic two-file backend change.** `OrderService::applyInventoryForTransition` no longer writes the `+qty Return To Stock` on the post-ship → Returned transition. `ReturnService::inspect()` now writes the `+qty` (referenced to OrderReturn) only on `Good + restockable=true`; every other verdict writes nothing.
+- **Inflation window eliminated.** On-hand stays at the post-Ship level until inspection; the ~1-day window during which returned-but-not-verified stock was being sold is closed.
+- **No movement reversal needed for Damaged.** Under the old optimistic model, Damaged wrote a `-qty Return To Stock` reversal of the optimistic `+qty`. Under Phase 4B there is no `+qty` to reverse, so Damaged writes nothing — the Ship `-qty` stays as the write-off baseline and the damage signal lives in the returns row alone.
+- **Test files updated atomically with the service change** (per the doc §5 warning about partial migration being the most dangerous failure mode). 6 tests rewritten, 1 added. No test deleted blindly.
+- **Reference linkage changed:** historical `Return To Stock` rows referenced the Order; new `Return To Stock` rows reference the OrderReturn. A revert leaves both forms readable — on-hand sums are identical. No data migration required.
+- **No new permission slug, no new route, no migration, no seeder change.** Deploy is plain `git pull` + `npm run build`. Phase 3's seeder steps do NOT need to be re-run.
 
 ---
 

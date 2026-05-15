@@ -354,8 +354,13 @@ class ReturnFromStatusChangeTest extends TestCase
 
     /* ────────────────────── 6. Inventory + audit pass-through ────────────────────── */
 
-    public function test_inventory_return_to_stock_still_fires_via_existing_orderservice_path(): void
+    public function test_returned_no_longer_writes_optimistic_return_to_stock(): void
     {
+        // Phase 4B inventory policy — `Order → Returned` no longer writes
+        // the optimistic +qty `Return To Stock` movement. Stock comes back
+        // ONLY when `ReturnService::inspect(Good, restockable=true)` runs.
+        // This test pins the absence of the optimistic write at the
+        // status-change layer.
         $user = $this->userWith(['orders.change_status', 'returns.create', 'orders.view']);
         $order = $this->deliveredOrder(qty: 2);
 
@@ -368,17 +373,18 @@ class ReturnFromStatusChangeTest extends TestCase
             ])
             ->assertRedirect();
 
-        $rts = InventoryMovement::query()
+        $rtsCount = InventoryMovement::query()
             ->where('product_id', $this->product->id)
             ->where('movement_type', 'Return To Stock')
             ->where('reference_type', Order::class)
             ->where('reference_id', $order->id)
-            ->first();
+            ->count();
 
-        $this->assertNotNull($rts, 'Existing OrderService inventory hook must still fire under the new flow.');
-        $this->assertSame(2, (int) $rts->quantity);
-        // Order shipped 2 (-2), then returned (+2) → restored to original.
-        $this->assertSame($onHandBefore + 2, $this->inventory->onHandStock($this->product->id, null));
+        $this->assertSame(0, $rtsCount,
+            'Phase 4B: Order → Returned MUST NOT write an optimistic Return To Stock movement; inspect() is the single source.');
+        // On-hand unchanged from the post-Ship level — no phantom +2.
+        $this->assertSame($onHandBefore, $this->inventory->onHandStock($this->product->id, null),
+            'On-hand must stay at the post-Ship level after Returned (no optimistic +qty).');
     }
 
     public function test_audit_log_records_both_status_change_and_return_creation_in_same_transaction(): void

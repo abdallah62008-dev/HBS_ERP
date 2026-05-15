@@ -117,27 +117,28 @@ This is a **manual** checklist — automated tests cover the contract, this list
 
 ---
 
-## 8. Good return — stock behaviour verified
+## 8. Good return — stock behaviour verified (Phase 4B policy)
 
 | Step | Expected | ✓ |
 |---|---|:--:|
 | Note the product's on-hand BEFORE creating the order. | E.g. 100. | |
 | Create a 3-unit order. Confirm → Ship → Deliver. | On-hand should now be 97 (the `-3` Ship movement). | |
-| Mark the order Returned. | On-hand jumps to 100 (the optimistic `+3` `Return To Stock`). | |
-| Inspect the return as Good + restockable. | On-hand stays at 100 (no further movement; the optimistic +qty is confirmed). | |
+| Mark the order Returned. | **On-hand stays at 97.** Stock is NOT optimistically restored. *(Phase 4B change — was 100 under the old optimistic model.)* | |
+| *(Optional — Phase 3)* Mark received. | On-hand still 97. Marker only. | |
+| Inspect the return as Good + restockable. | **On-hand jumps to 100** — the `+3 Return To Stock` is written HERE, referenced to the OrderReturn. | |
 | Close the return. | On-hand stays at 100. | |
-| Verify `inventory_movements` rows for the product/order. | Exactly two rows under the order's reference: `Ship -3`, `Return To Stock +3`. No reversal row. | |
+| Verify `inventory_movements` rows for the product. | Exactly two rows: `Ship -3` (reference Order), `Return To Stock +3` (reference **OrderReturn**, notes: *"Return inspected as Good — restocked"*). No optimistic +qty referenced to the Order. | |
 
 ---
 
-## 9. Damaged return — stock behaviour verified
+## 9. Damaged return — stock behaviour verified (Phase 4B policy)
 
 | Step | Expected | ✓ |
 |---|---|:--:|
-| Same setup as journey 8 (Delivered → Returned). After Returned, on-hand is back to 100. | | |
-| Inspect the return as `Damaged` (or `Missing Parts` / `Unknown`) — restockable=false. | On-hand drops back to 97 (the reversal `-3` cancels the optimistic restock). | |
-| Verify `inventory_movements`. | Three rows: `Ship -3` (reference Order), `Return To Stock +3` (reference Order), `Return To Stock -3` (reference OrderReturn, note: *"Reversal — return inspected as Damaged"*). | |
-| Check the return row. | `return_status = Damaged`, `product_condition = Damaged`, `restockable = false`, `inspected_at` set. | |
+| Same setup as journey 8 (Delivered → Returned). **After Returned, on-hand stays at 97** (no optimistic +qty). | | |
+| Inspect the return as `Damaged` (or `Missing Parts` / `Unknown`) — restockable=false. | **On-hand stays at 97.** No movement is written. The Ship `-3` is the write-off baseline. *(Phase 4B change — previously wrote a `-3` reversal that "cancelled" the optimistic +3; under the new policy there is no optimistic +3 to cancel.)* | |
+| Verify `inventory_movements`. | **Exactly one row** under the order: `Ship -3` (reference Order). No `Return To Stock` row of any kind. No `Return Damaged` row. | |
+| Check the return row. | `return_status = Damaged`, `product_condition = Damaged`, `restockable = false`, `inspected_at` set. The damage signal lives entirely in the returns row + audit log. | |
 
 ---
 
