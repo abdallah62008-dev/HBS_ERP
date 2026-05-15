@@ -47,8 +47,8 @@ This is a **manual** checklist — automated tests cover the contract, this list
 |---|---|:--:|
 | Use the order created in journey 1 (already has a return). | | |
 | Open `/orders/{id}`. | The *Returned* option is HIDDEN from the *Change status* dropdown; the status modal shows the *"already has a return record"* hint. | |
-| Try forcing it via `/returns/create?order_id=<id>`. | The page shows *"Order {order_number} already has a return record and cannot be returned again."* and the order is **not** pre-selected. | |
-| Try the direct POST: `POST /returns` with `order_id` set. | Validation error from `OrderReturnRequest` — duplicate-return rule blocks. | |
+| Try forcing it via `/returns/create?order_id=<id>`. | The page shows *"Order {order_number} already has a return record and cannot be returned again."* The order is **not** pre-selected. The amber notice carries an *"Open existing return →"* link to `/returns/{existing_id}` (Phase 2). | |
+| Try the direct POST: `POST /returns` with `order_id` set. | Validation error from `OrderReturnRequest` — duplicate-return rule blocks. Original return is untouched (Phase 2 pinning). | |
 
 ---
 
@@ -69,7 +69,8 @@ This is a **manual** checklist — automated tests cover the contract, this list
 | Step | Expected | ✓ |
 |---|---|:--:|
 | Open `/returns`. | The page subtitle reads *"Active returns · N of M total"*. The `Active` tab is selected (dark fill). | |
-| Find the return from journey 1 in the table. | Row visible. Status badge `Pending`, condition `Unknown`. | |
+| Find the return from journey 1 in the table. | Row visible. Status badge `Pending`, condition `Unknown`. The first column shows the RMA reference `RET-000NNN` instead of `#N` (Phase 2). | |
+| Hover the reference. | Tooltip reads *"Return #N"* — confirms the link between the formatted display and the underlying id. | |
 | Click the `Resolved` tab. | The return is NOT in the Resolved view. The subtitle changes to *"Resolved returns · X of M total"*. | |
 | Click the `All` tab. | The return IS visible in All. The subtitle changes to *"All returns · M"*. | |
 | Click the `Pending` per-status chip. | Returns filtered to just `Pending`. The return is visible. | |

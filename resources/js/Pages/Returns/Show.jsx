@@ -70,11 +70,17 @@ export default function ReturnShow({ return: ret, reasons, refund_context, order
         router.post(route('returns.close', ret.id));
     };
 
+    // Phase 2 — RMA display reference (RET-000006). Provided by the
+    // OrderReturn model's `display_reference` accessor; we fall back to
+    // a bare `#id` only if an older payload (or test fixture) doesn't
+    // include it.
+    const ref = ret.display_reference ?? `Return #${ret.id}`;
+
     return (
-        <AuthenticatedLayout header={`Return #${ret.id}`}>
-            <Head title={`Return #${ret.id}`} />
+        <AuthenticatedLayout header={ref}>
+            <Head title={ref} />
             <PageHeader
-                title={`Return #${ret.id}`}
+                title={ref}
                 subtitle={`Order ${ret.order?.order_number} · ${ret.order?.customer_name}`}
                 actions={<Link href={route('returns.index')} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50">← Returns</Link>}
             />

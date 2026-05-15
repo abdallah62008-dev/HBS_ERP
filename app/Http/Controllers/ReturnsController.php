@@ -139,11 +139,18 @@ class ReturnsController extends Controller
         // preselected order *only if* it has no existing return.
         $order = null;
         $alreadyReturnedNotice = null;
+        // Phase 2 — when the operator landed on /returns/create for an
+        // order that already has a return, surface the existing return's
+        // id so the page can offer a direct "Open existing return →"
+        // link instead of just a dead-end notice.
+        $existingReturnId = null;
         if ($request->filled('order_id')) {
             $candidate = Order::with('customer:id,name,primary_phone')->find($request->order_id);
             if ($candidate) {
-                if ($candidate->returns()->exists()) {
+                $existing = $candidate->returns()->latest('id')->first(['id']);
+                if ($existing) {
                     $alreadyReturnedNotice = "Order {$candidate->order_number} already has a return record and cannot be returned again.";
+                    $existingReturnId = $existing->id;
                 } else {
                     $order = $candidate;
                 }
@@ -153,6 +160,7 @@ class ReturnsController extends Controller
         return Inertia::render('Returns/Create', [
             'preselected_order' => $order,
             'already_returned_notice' => $alreadyReturnedNotice,
+            'existing_return_id' => $existingReturnId,
             // Exclude orders that already have a return from the
             // dropdown. Backend validation will also reject duplicates
             // (defense in depth) — see OrderReturnRequest::rules().

@@ -126,7 +126,7 @@ export default function OrderShow({
                             <Link
                                 href={route('returns.show', existing_return.id)}
                                 className="rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700"
-                                title={`Open return #${existing_return.id} (status: ${existing_return.return_status})`}
+                                title={`Open return ${existing_return.display_reference ?? `#${existing_return.id}`} (status: ${existing_return.return_status})`}
                             >
                                 Manage return
                             </Link>
@@ -180,7 +180,7 @@ export default function OrderShow({
             {existing_return && (
                 <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                     <span>
-                        This order has a return record <span className="font-mono">#{existing_return.id}</span>
+                        This order has a return record <span className="font-mono">{existing_return.display_reference ?? `#${existing_return.id}`}</span>
                         {' '}— status <strong>{existing_return.return_status}</strong>
                         {existing_return.product_condition ? <> · condition <strong>{existing_return.product_condition}</strong></> : null}.
                         {' '}Manage reason, condition, refund and close from the return page.

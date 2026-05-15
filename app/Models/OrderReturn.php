@@ -46,6 +46,28 @@ class OrderReturn extends Model
         'inspected_at' => 'datetime',
     ];
 
+    /**
+     * Always expose the formatted display reference (`RET-000006`) on
+     * every serialised response so the frontend can show a consistent
+     * human-friendly identifier without re-implementing the format.
+     *
+     * Phase 2 — Return Intake & RMA Standards. This is a *display*
+     * convention, NOT a stored column. If an external integration later
+     * needs a real RMA number, promote this to a migrated `rma_number`
+     * column (Phase 6+ work — needs business approval).
+     */
+    protected $appends = ['display_reference'];
+
+    /**
+     * Compute the human-friendly return reference, e.g. id=6 → "RET-000006".
+     * Used by Returns/Index, Returns/Show, Orders/Show banner, and the
+     * Orders/* `existing_return` prop.
+     */
+    public function getDisplayReferenceAttribute(): string
+    {
+        return 'RET-' . str_pad((string) $this->id, 6, '0', STR_PAD_LEFT);
+    }
+
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class);

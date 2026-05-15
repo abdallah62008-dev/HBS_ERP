@@ -58,7 +58,7 @@ These five rules govern every Returns-related screen. They exist to prevent the 
 3. **Primary tabs (queue mode)** — `Active | Resolved | All`, each with a count badge. The selected tab gets a dark fill.
 4. **Per-status drill-down chips** — `Pending | Received | Inspected | Damaged`, then a visual gap, then the visually-subtler `Restocked | Closed` chips. Each chip shows its count. Each chip applies `?status=<Name>`.
 5. **Helper notice (Active view only, when `counts.resolved > 0`)** — A slate panel reading *"Showing active returns only. N resolved (Restocked + Closed) are hidden. [View Resolved →]"*. Disappears on every non-Active view.
-6. **Results table** — `# / Order / Customer / Reason / Condition / Status / Refund / Inspector`. Empty state on the Active view (when resolved > 0) reads: *"No active returns. N resolved are under Resolved."*
+6. **Results table** — `Return / Order / Customer / Reason / Condition / Status / Refund / Inspector`. The `Return` column shows the RMA display reference `RET-000006` (Phase 2 — see §6.bis). Empty state on the Active view (when resolved > 0) reads: *"No active returns. N resolved are under Resolved."*
 7. **Pagination** — standard `Pagination` component, 30 per page.
 
 ### Counts must be honest
@@ -99,9 +99,66 @@ The counts shown next to the tabs and chips must represent the **whole dataset u
 
 ---
 
+## 5.bis. `Returns/Create.jsx` — the direct intake form (Phase 2)
+
+The direct create flow is a **back-office correction tool**. Wherever the order's status is still mutable, operators should reach Returns through the atomic flow (`Orders → order page → Change status → Returned`). This page exists for legacy data and operator-recovery cases.
+
+| Element | Behaviour |
+|---|---|
+| **"Preferred path" notice (slate, top of form)** | Always shown. Reads: *"Preferred path: open Orders → the order → Change status → Returned. That flow updates the order status, creates the return, and adjusts inventory atomically. Use this form only for back-office corrections."* |
+| **Already-returned notice (amber)** | Shown when `?order_id=X` refers to an order that already has a return. Reads: *"Order {N} already has a return record and cannot be returned again."* Includes a *"Open existing return →"* link sourced from the controller-supplied `existing_return_id` prop. |
+| **Field: Reason** | Required. Helper: *"A reason is required for every return."* |
+| **Field: Product condition (provisional)** | Optional; defaults to `Unknown`. Helper: *"Use Unknown if the goods haven't arrived yet — the inspector locks the final condition later."* |
+| **Field: Refund amount** | Optional. Helper: *"Optional. Records the **intended** refund — no money moves until a separate Request refund action."* Pinned at the intake layer so the operator can't mistake the field for a payment. |
+| **Field: Shipping loss** | Optional. Helper: *"Optional. Records absorbed shipping cost — no finance row is posted."* |
+| **Field: Notes (internal)** | Optional. Helper: *"Operations-internal notes for warehouse and order agents — not customer-facing."* |
+
+### Don't
+
+- Don't auto-redirect the operator from `/returns/create` when an `order_id` is supplied with an existing return. The amber notice + the link is the right UX — the operator may still want to land on the form to see the recent-orders fallback.
+- Don't add a customer-facing note field here. The current `notes` column is single-purpose (internal); splitting it is a future migration phase and needs an operational request.
+
+---
+
 ## 6. Status badges — color conventions
 
 `StatusBadge` already exists in `resources/js/Components/StatusBadge.jsx`. For Returns, the convention should be:
+
+### 6.bis. Return display reference (Phase 2 — no migration)
+
+Every return carries a derived `display_reference` value computed by the `OrderReturn` model's `getDisplayReferenceAttribute()` accessor:
+
+```
+id=6   → "RET-000006"
+id=42  → "RET-000042"
+```
+
+The accessor is registered in the model's `$appends` array, so every serialised payload (Inertia props, JSON responses, audit log scaffolds) contains the field. The frontend reads `ret.display_reference` directly — there is no client-side fallback formatter to drift from the backend rule.
+
+**Where it appears:**
+
+- `Returns/Index.jsx` — the *Return* column on the queue table (`RET-000006` instead of `#6`).
+- `Returns/Show.jsx` — the page header (`RET-000006`) and `<Head title>`.
+- `Orders/Show.jsx` — the amber return-context banner and the *Manage return* button's `title` tooltip both render the formatted reference.
+
+**Where it intentionally does NOT appear:**
+
+- Conversational copy ("Refund #5 for return #6") keeps the short `#id` form because it's a sentence fragment, not an identifier label.
+- `Orders/Edit.jsx` — the helper hint uses prose ("open the return"), so the formatted reference isn't needed.
+
+**Future direction.** If an external integration ever requires a real RMA number, add a nullable `rma_number` column in a dedicated migration phase. At that point swap the accessor to prefer the column when set, falling back to the padded id:
+
+```php
+public function getDisplayReferenceAttribute(): string
+{
+    return $this->attributes['rma_number']
+        ?? 'RET-' . str_pad((string) $this->id, 6, '0', STR_PAD_LEFT);
+}
+```
+
+The frontend continues to read `display_reference` unchanged.
+
+---
 
 | Status | Recommended color | Rationale |
 |---|---|---|

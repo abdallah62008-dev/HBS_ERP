@@ -201,7 +201,7 @@ export default function ReturnsIndex({
                 <table className="min-w-full divide-y divide-slate-200 text-sm">
                     <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
                         <tr>
-                            <th className="px-4 py-2.5">#</th>
+                            <th className="px-4 py-2.5">Return</th>
                             <th className="px-4 py-2.5">Order</th>
                             <th className="px-4 py-2.5">Customer</th>
                             <th className="px-4 py-2.5">Reason</th>
@@ -231,7 +231,7 @@ export default function ReturnsIndex({
                         {returnsList.data.map((r) => (
                             <tr key={r.id} className="hover:bg-slate-50">
                                 <td className="px-4 py-2.5">
-                                    <Link href={route('returns.show', r.id)} className="font-mono text-xs text-slate-700 hover:text-indigo-600">#{r.id}</Link>
+                                    <Link href={route('returns.show', r.id)} className="font-mono text-xs text-slate-700 hover:text-indigo-600" title={`Return #${r.id}`}>{r.display_reference ?? `#${r.id}`}</Link>
                                 </td>
                                 <td className="px-4 py-2.5 font-mono text-xs">
                                     <Link href={route('orders.show', r.order_id)} className="text-slate-600 hover:text-indigo-600">{r.order?.order_number}</Link>

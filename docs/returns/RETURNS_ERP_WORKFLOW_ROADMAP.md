@@ -55,6 +55,16 @@ Each phase below is **independently shippable**. Phase 0 is documentation only; 
 | **Risks** | Low. Most of this phase is wording. The RMA column is additive. |
 | **Commit strategy** | One commit per concern: `Tighten direct return-creation UX`, optionally `Add RMA number to returns`. |
 | **Go / no-go** | An operator who lands on `/returns/create?order_id=X` for an order that has a return sees a clear "already has a return" notice (already present today — polish copy only). |
+| **Status** | ✅ **Shipped.** No migration; `rma_number` deferred. Implemented as a display-only convention. |
+
+### Phase 2 — as-shipped notes
+
+- **RMA reference is display-only.** `OrderReturn::getDisplayReferenceAttribute()` returns `RET-000006` (id zero-padded to 6 digits, `RET-` prefix). The accessor is in `$appends` so every JSON response carries the field; the frontend reads `ret.display_reference` directly. Used in `Returns/Index`, `Returns/Show` header, and the `Orders/Show` return-context banner + "Manage return" tooltip.
+- **No `rma_number` column.** If an external system (carrier, marketplace, accounting) ever needs a real RMA identifier, promote the accessor to a real column in a future migration phase — at that point the front-end already reads from `display_reference`, so the swap is one-line.
+- **Intake-form copy was tightened, not the lifecycle.** `Returns/Create.jsx` now opens with a slate "preferred path" notice nudging operators back to the atomic flow, and the help text under every money field spells out *intent vs. commitment*: `refund_amount` is intent, `shipping_loss_amount` is intent, `notes` are operations-internal. The behaviour of every field is unchanged.
+- **Duplicate-return UX is now an explicit link.** `ReturnsController::create` exposes `existing_return_id` whenever the preselected order already has a return. The page renders an "Open existing return →" button alongside the amber notice instead of leaving the operator on a dead end.
+- **Single `notes` field retained.** The split into `customer_note` / `internal_note` / `warehouse_note` is deferred to a later phase — needs a real operational ask before adding columns.
+- **Tests added:** `tests/Feature/Returns/ReturnIntakeTest.php` (10 tests, 81 assertions). Pins the direct-create gaps the change-status suite doesn't cover: missing-reason 422, duplicate-blocked friendly error + originals preserved, success redirect, `existing_return_id` prop wiring, no-Refund/no-cashbox on intake, and the `display_reference` format + serialisation contract.
 
 ---
 
