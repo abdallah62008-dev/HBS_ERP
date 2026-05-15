@@ -303,6 +303,29 @@ class ReturnsController extends Controller
             ->with('success', "Refund #{$refund->id} requested for return #{$return->id}.");
     }
 
+    /**
+     * Phase 3 — optional Received checkpoint.
+     *
+     * Moves a return from `Pending` to `Received`. Pure lifecycle marker —
+     * no inventory / refund / cashbox side-effects. The legacy fast-path
+     * (`Pending → inspect()` directly) remains supported; this endpoint
+     * exists for warehouses that batch-inspect later.
+     *
+     * Permission: `returns.receive` (warehouse-agent + manager + admin).
+     * Order-agent intentionally does NOT have this slug — physical
+     * handling is warehouse-side.
+     */
+    public function markReceived(Request $request, OrderReturn $return): RedirectResponse
+    {
+        try {
+            $this->returns->markReceived($return, $request->user());
+        } catch (InvalidArgumentException|RuntimeException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        return back()->with('success', "Return {$return->display_reference} marked as received.");
+    }
+
     public function inspect(ReturnInspectRequest $request, OrderReturn $return): RedirectResponse
     {
         $data = $request->validated();

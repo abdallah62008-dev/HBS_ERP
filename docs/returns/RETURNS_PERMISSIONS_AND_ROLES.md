@@ -14,7 +14,8 @@ Seeded in `PermissionsSeeder` under the `returns` module:
 | `returns.view` | Read access — `/returns` index, `/returns/{id}` show. Required to render the *Manage return* button on the order page (the Phase 1 pending work). |
 | `returns.create` | Open a new return record. Required by `ReturnsController::store`, `OrdersController::changeStatus` (when target is `Returned`), and `OrdersController::update` (when transitioning into `Returned`). Also currently used as the gate for `update` (limited-fields edit) and `close`. |
 | `returns.inspect` | Run the inspection step. Required by `ReturnsController::inspect` → `ReturnService::inspect`. |
-| `returns.approve` | Reserved. Not yet wired to any route. Intended for Phase 3 — a possible "approve inspection result" step before the verdict is final. |
+| `returns.receive` | **Phase 3 — optional Received checkpoint.** Required by `ReturnsController::markReceived` → `ReturnService::markReceived`. Pure lifecycle marker — no inventory / refund / cashbox effect. Granted to warehouse-agent + manager + admin. Not granted to order-agent or viewer. |
+| `returns.approve` | Currently wired to `/returns/{id}/close` and the return-reasons CRUD routes. Originally reserved for a possible "approve inspection result" step before the verdict is final. |
 
 The **refund** side of the wall has its own slugs, separately documented in `docs/finance/PHASE_0_PERMISSIONS_AND_ROLES.md`:
 
@@ -38,6 +39,7 @@ Sourced from the current `RolesSeeder` plus the recent `ac08d7e` grant of `retur
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | View returns (`returns.view`) | ✅ | ✅ | ✅ | ✅ | ✅ | maybe | — | ✅ |
 | Create return (`returns.create`) | ✅ | ✅ | ✅ | ✅ | — | — | — | — |
+| **Mark return as received** (`returns.receive`) | ✅ | ✅ | ✅ | — | ✅ | — | — | — |
 | Inspect return (`returns.inspect`) | ✅ | ✅ | ✅ | — | ✅ | — | — | — |
 | Edit return details (`returns.create` today; Phase 3 may split) | ✅ | ✅ | ✅ | limited | limited | — | — | — |
 | Close return (`returns.create` today; Phase 3 may split) | ✅ | ✅ | ✅ | maybe | maybe | — | — | — |

@@ -320,6 +320,11 @@ Route::middleware(['auth', 'active'])->group(function () {
     // service layer additionally enforces forbidden-field defence.
     Route::middleware('permission:returns.create')->put('/returns/{return}', [ReturnsController::class, 'update'])
         ->name('returns.update');
+    // Phase 3 — optional Received checkpoint. Pure lifecycle marker;
+    // no inventory / refund / cashbox effect. Permission slug is new
+    // (returns.receive), granted to warehouse-agent + manager + admin.
+    Route::middleware('permission:returns.receive')->post('/returns/{return}/receive', [ReturnsController::class, 'markReceived'])
+        ->name('returns.receive');
     Route::middleware('permission:returns.inspect')->post('/returns/{return}/inspect', [ReturnsController::class, 'inspect'])
         ->name('returns.inspect');
     Route::middleware('permission:returns.approve')->post('/returns/{return}/close', [ReturnsController::class, 'close'])

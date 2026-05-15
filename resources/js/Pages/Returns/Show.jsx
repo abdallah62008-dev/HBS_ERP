@@ -70,6 +70,16 @@ export default function ReturnShow({ return: ret, reasons, refund_context, order
         router.post(route('returns.close', ret.id));
     };
 
+    // Phase 3 — optional Received checkpoint. Pure lifecycle marker:
+    // posting this endpoint flips Pending → Received without touching
+    // inventory, refunds, or cashbox. The fast-path (Pending → inspect()
+    // directly) remains supported; this button lets warehouses with a
+    // batch-inspection workflow record "parcel received, inspection
+    // pending" as a separate step.
+    const markReceived = () => {
+        router.post(route('returns.receive', ret.id), {}, { preserveScroll: true });
+    };
+
     // Phase 2 — RMA display reference (RET-000006). Provided by the
     // OrderReturn model's `display_reference` accessor; we fall back to
     // a bare `#id` only if an older payload (or test fixture) doesn't
@@ -140,6 +150,28 @@ export default function ReturnShow({ return: ret, reasons, refund_context, order
                 </div>
 
                 <div className="space-y-4">
+                    {/* Phase 3 — optional Received checkpoint. Shown only
+                        while the return is Pending AND the user has the
+                        new `returns.receive` slug (warehouse-agent +
+                        manager + admin). Inspecting directly remains
+                        supported via the form below — Received is a
+                        convenience, not a prerequisite. */}
+                    {can('returns.receive') && ret.return_status === 'Pending' && (
+                        <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
+                            <h2 className="text-sm font-semibold text-slate-700">Receive</h2>
+                            <p className="text-[11px] text-slate-500">
+                                Mark the parcel as physically received in the warehouse. Inventory and refunds are unaffected — inspection still decides the verdict.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={markReceived}
+                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                            >
+                                Mark received
+                            </button>
+                        </div>
+                    )}
+
                     {can('returns.inspect') && ['Pending', 'Received'].includes(ret.return_status) && (
                         <form onSubmit={submitInspect} className="rounded-lg border border-slate-200 bg-white p-5 space-y-3">
                             <h2 className="text-sm font-semibold text-slate-700">Inspect</h2>

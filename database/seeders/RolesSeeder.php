@@ -68,7 +68,7 @@ class RolesSeeder extends Seeder
             'suppliers.view', 'suppliers.create', 'suppliers.edit',
             'shipping.view', 'shipping.assign', 'shipping.print_label', 'shipping.update_status',
             'collections.view', 'collections.update',
-            'returns.view', 'returns.create', 'returns.approve', 'returns.inspect',
+            'returns.view', 'returns.create', 'returns.approve', 'returns.inspect', 'returns.receive',
             'expenses.view', 'expenses.create', 'expenses.edit',
             'ads.view', 'ads.create', 'ads.edit',
             'marketers.view', 'marketers.edit', 'marketers.wallet', 'marketers.statement', 'marketers.prices',
@@ -133,7 +133,8 @@ class RolesSeeder extends Seeder
             'inventory.transfer', 'inventory.view_movements',
             'purchases.view',
             'shipping.view', 'shipping.print_label',
-            'returns.view', 'returns.inspect',
+            // Phase 3 — warehouse agents own the physical receive + inspect path.
+            'returns.view', 'returns.inspect', 'returns.receive',
             // Finance Phase 5A — read-only access for return context.
             'refunds.view',
         ];

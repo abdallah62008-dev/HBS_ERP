@@ -77,6 +77,22 @@ This is a **manual** checklist — automated tests cover the contract, this list
 
 ---
 
+## 5.bis. Optional Received checkpoint (Phase 3)
+
+| Step | Expected | ✓ |
+|---|---|:--:|
+| Log in as **Warehouse Agent**. | | |
+| Open a `Pending` return at `/returns/{id}`. | A *"Receive"* card is visible in the action column. The card explains that receive is a lifecycle marker; inventory and refunds are untouched. The card sits ABOVE the inspect form. | |
+| Click *"Mark received"*. | Page reloads; return status badge updates to `Received`. Flash success: *"Return RET-000NNN marked as received."* The *Receive* card disappears; the *Inspect* form remains. | |
+| Verify the audit trail. | `audit_logs` has a row with `action='received', module='returns', record_type=OrderReturn, record_id=<id>`. | |
+| Inspect the same return as Good + restockable. | Succeeds. `return_status` becomes `Restocked`. On-hand stays at the post-Returned level (no extra movement). | |
+| Repeat with a different return: skip Receive entirely, inspect directly from Pending. | Succeeds — the fast-path is unchanged. | |
+| Log in as **Order Agent** and try to mark a Pending return as received. | Action returns 403. Status stays `Pending`. (Receive is warehouse-side.) | |
+| Log in as **Viewer** and try to mark a Pending return as received. | 403. | |
+| Try to mark a `Restocked` / `Damaged` / `Closed` return as received via direct POST. | Service rejects with flash error *"Return #N cannot be marked as received from status 'X'."*. Status unchanged. | |
+
+---
+
 ## 6. Closed return moves to Resolved / All
 
 | Step | Expected | ✓ |

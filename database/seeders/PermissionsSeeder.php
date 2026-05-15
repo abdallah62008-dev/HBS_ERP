@@ -104,6 +104,9 @@ class PermissionsSeeder extends Seeder
                 'returns.create' => 'Create return',
                 'returns.approve' => 'Approve return',
                 'returns.inspect' => 'Inspect returned product',
+                // Phase 3 — optional Received checkpoint. Warehouse role
+                // mark a return as physically received before inspection.
+                'returns.receive' => 'Mark return as received',
             ],
             // Finance Phase 5A — Refunds foundation.
             // Finance Phase 5B — adds `refunds.pay` for the actual cashbox-OUT step.

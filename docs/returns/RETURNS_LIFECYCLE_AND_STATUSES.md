@@ -37,8 +37,8 @@ They're related (a `Damaged` status implies a non-good condition) but they answe
 | Status | Meaning | When entered | Entered by |
 |---|---|---|---|
 | **Pending** | A return record has been opened but not yet processed. The goods have not been inspected. | At `ReturnService::open()` — i.e. the moment the order moves to `Returned` (atomic flow) OR the moment `/returns/store` is called (direct-create flow). | Any user with `returns.create`. |
-| **Received** | The warehouse has physically received the goods but has not yet inspected them. | **Not currently written by any service.** Reserved for a future Received-step UI (Phase 3). The receive checkpoint exists conceptually; today returns go `Pending → Inspected → Restocked/Damaged → Closed` without touching this state. | TBD (Phase 3). |
-| **Inspected** | The goods have been inspected but the verdict has not yet resolved into a restock / damage outcome. | **Not currently written by any service.** Reserved for the same Phase 3 work. | TBD (Phase 3). |
+| **Received** | The warehouse has physically received the parcel but has not yet inspected it. | **Phase 3 shipped — optional.** `ReturnService::markReceived()` flips `Pending → Received`. The legacy `Pending → Inspect` fast-path still works; Received is a convenience checkpoint for warehouses that batch-inspect later in the shift. No inventory / refund / cashbox side-effects. | User with `returns.receive` (warehouse-agent, manager, admin). |
+| **Inspected** | The goods have been inspected but the verdict has not yet resolved into a restock / damage outcome. | **Not currently written by any service.** Reserved for a possible future "decided" intermediate state where the inspector logs the condition but the restock-vs-write-off call comes later. Today `inspect()` collapses Inspected + Restocked/Damaged into a single transition. | TBD (future phase). |
 | **Restocked** | Inspection concluded **Good and restockable** — the optimistic `Return To Stock` movement stands; goods are back in sellable on-hand. | `ReturnService::inspect($return, condition, restockable=true)` with `condition === 'Good'`. | User with `returns.inspect` (warehouse-agent, manager, admin). |
 | **Damaged** | Inspection concluded the goods are **NOT** restockable — either condition is Damaged / Missing Parts / Unknown, OR `restockable` was explicitly false. The optimistic `Return To Stock` was reversed (–qty). | `ReturnService::inspect($return, …, restockable=false)` or any non-Good condition. | User with `returns.inspect`. |
 | **Closed** | The return lifecycle is finalised. No further state changes; no inventory side effects on entry. | `ReturnService::close($return)`. | User with `returns.create` (current rule) — *see Phase 4 design note below*. |
@@ -105,32 +105,49 @@ Anti-rules that the service layer enforces:
 
 ---
 
-## 6. Transition diagram — current
+## 6. Transition diagram — current (post-Phase 3)
 
 ```
                     ┌─────────┐
        open()  ───▶ │ Pending │
                     └────┬────┘
-                         │ inspect()  (atomic)
+                         │
               ┌──────────┴──────────┐
               │                     │
-   condition=Good                 condition=Damaged|Missing|Unknown
-   AND restockable=true              OR restockable=false
-              │                     │
-              ▼                     ▼
-        ┌──────────┐          ┌──────────┐
-        │Restocked │          │ Damaged  │
-        └────┬─────┘          └────┬─────┘
+       markReceived()        inspect()   (fast-path; skips Received)
+       (optional)                  │
+              │                    │
+              ▼                    │
+        ┌──────────┐               │
+        │ Received │               │
+        └────┬─────┘               │
              │                     │
-             │     close()         │
+             │ inspect()           │
              └──────────┬──────────┘
+                        │
+              ┌─────────┴─────────┐
+              │                   │
+    condition=Good              condition=Damaged|Missing|Unknown
+    AND restockable=true           OR restockable=false
+              │                   │
+              ▼                   ▼
+        ┌──────────┐         ┌──────────┐
+        │Restocked │         │ Damaged  │
+        └────┬─────┘         └────┬─────┘
+             │                    │
+             │     close()        │
+             └──────────┬─────────┘
                         ▼
                   ┌──────────┐
                   │  Closed  │  (terminal)
                   └──────────┘
 ```
 
-`Received` and `Inspected` are reachable as filter values but no `open()`/`inspect()`/`close()` code path transitions INTO them today. Phase 3 will use them as intermediate checkpoints in the warehouse flow.
+Two equivalent legal paths to a verdict:
+- **Fast path** — `Pending → inspect() → (Restocked|Damaged) → close()` (single-shift warehouses inspect on the spot)
+- **Received path** — `Pending → markReceived() → inspect() → (Restocked|Damaged) → close()` (batch-inspection warehouses log "parcel arrived" separately)
+
+Behaviour after `inspect()` is identical on both paths. `Inspected` remains an enum value reachable only via filter — no service writes it.
 
 ---
 

@@ -81,6 +81,17 @@ Each phase below is **independently shippable**. Phase 0 is documentation only; 
 | **Commit strategy** | One commit per service+UI step: `Add receive step to return inspection`, then `Split inspect into condition and restock-decision`. |
 | **Go / no-go** | The classic `Pending → inspect()` shortcut still works. The new path `Pending → Received → Inspected → Restocked` also works and writes the right audit entries. Inventory side-effects unchanged. |
 | **Decision needed** | Should the receive step be mandatory or optional? Recommend optional (a backwards-compatible shortcut). |
+| **Status** | ✅ **Shipped (Option A — Received is optional).** The `markInspected → decideRestock` two-step split is **deferred** — `inspect()` continues to collapse condition + restock-decision into one transition. |
+
+### Phase 3 — as-shipped notes
+
+- **Received is optional.** Two equivalent legal paths: the legacy `Pending → inspect()` fast-path AND the new `Pending → markReceived() → inspect()` Received-path. Behaviour after `inspect()` is identical on both.
+- **`Inspected` enum value remains dormant.** Phase 3 deliberately did NOT split `inspect()` into `markInspected → decideRestock` — the operational case for two clicks instead of one wasn't strong enough. If a future phase needs the split, the enum is already present.
+- **New permission slug `returns.receive`** — granted to **warehouse-agent + manager + admin**. **Not** granted to order-agent, viewer, accountant. Mirrors the existing SoD: order-agent creates the paperwork at intake; warehouse handles physical receipt and inspection.
+- **Zero inventory / refund / cashbox impact.** `markReceived()` is a pure lifecycle marker. Audit log entry `action=received, module=returns` is written; nothing else.
+- **Race protection.** `markReceived()` uses `lockForUpdate` and re-checks `return_status === 'Pending'` inside the transaction to defend against two operators clicking simultaneously.
+- **Files shipped:** `app/Services/ReturnService.php` (+`markReceived()`), `app/Http/Controllers/ReturnsController.php` (+`markReceived` action), `routes/web.php` (+POST `/returns/{return}/receive` name=`returns.receive`), `database/seeders/{Permissions,Roles}Seeder.php` (new slug + role grants), `resources/js/Pages/Returns/Show.jsx` (Receive panel shown only on Pending with `returns.receive`).
+- **Tests added:** `tests/Feature/Returns/ReturnInspectionWorkflowTest.php` — 17 tests, 78 assertions. Covers state transition, permission gating (positive + negative for warehouse / order-agent / viewer / ad-hoc no-slug), blocked-from-non-Pending, no-side-effects on inventory and finance, `inspect-from-Received` writes the correct reversal on Damaged and writes nothing on Good+restockable, legacy fast-path regression, Received visible in Index + Reports.
 
 ---
 

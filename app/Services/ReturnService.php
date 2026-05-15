@@ -14,15 +14,27 @@ use RuntimeException;
 /**
  * Manages the lifecycle of an order return.
  *
- * Lifecycle:
- *   Pending → Received → Inspected → (Restocked | Damaged) → Closed
+ * Lifecycle (Phase 3 — Received is an optional checkpoint):
+ *   Pending → [Received] → Inspect → (Restocked | Damaged) → Closed
+ *
+ * Two equivalent legal paths to a verdict:
+ *   - Fast path:     Pending → inspect()           → (Restocked|Damaged) → close()
+ *   - Received path: Pending → markReceived() →
+ *                              inspect()           → (Restocked|Damaged) → close()
+ *
+ * Choosing one over the other is operational: warehouses that batch-
+ * inspect at end of shift will use the Received checkpoint to log "the
+ * parcel is on the receive bay, inspection pending"; warehouses that
+ * inspect on the spot keep the fast path. Behaviour after inspect() is
+ * identical on both paths.
  *
  * Key effects:
+ *   - markReceived(): NO inventory / refund / cashbox effect.
+ *     Pure lifecycle marker.
  *   - inspect(): records condition, decides restockable, stamps inspector,
- *     and ALWAYS reverses the order's prior `Return To Stock` movement
- *     (which OrderService::changeStatus('Returned') wrote optimistically),
- *     then re-applies the correct movement based on the inspection
- *     verdict (Return To Stock for Good, Return Damaged for the rest).
+ *     and either KEEPS the order's prior `Return To Stock` movement
+ *     (Good + restockable) or REVERSES it (any other verdict). Writes the
+ *     inventory_movement reversal row referenced to the OrderReturn.
  *
  * The cancel-marketer-profit and update-customer-risk steps from the
  * spec land in Phase 5 (marketer wallet) and Phase 6 (smart alerts).
@@ -272,6 +284,71 @@ class ReturnService
                     'shipping_loss_amount' => isset($patch['shipping_loss_amount']) ? (string) $patch['shipping_loss_amount'] : $old['shipping_loss_amount'],
                     'notes' => array_key_exists('notes', $patch) ? $patch['notes'] : $old['notes'],
                 ],
+            );
+
+            return $locked->refresh();
+        });
+    }
+
+    /**
+     * Phase 3 — optional Received checkpoint.
+     *
+     * Transitions a return from `Pending` to `Received` to record that the
+     * warehouse has physically received the parcel but has not yet
+     * inspected it. This is an **optional** step — the legacy
+     * `Pending → inspect()` fast-path remains supported (inspect() still
+     * accepts both `Pending` and `Received` as input states).
+     *
+     * Critical no-side-effect contract:
+     *   - NO inventory movement is written.
+     *   - NO refund or cashbox row is created or touched.
+     *   - product_condition, refund_amount, shipping_loss_amount, notes —
+     *     all untouched.
+     *
+     * The inventory side-effect for a return still happens exactly twice:
+     *   1. at `Order → Returned` (the optimistic +qty restock), and
+     *   2. at `inspect()` if the verdict is non-restockable (the reversal).
+     *
+     * Receiving sits between these two and writes no inventory rows.
+     */
+    public function markReceived(OrderReturn $return, ?User $actor = null): OrderReturn
+    {
+        if ($return->return_status !== 'Pending') {
+            throw new RuntimeException(
+                "Return #{$return->id} cannot be marked as received from status '{$return->return_status}'. "
+                . "Only returns in 'Pending' can be received."
+            );
+        }
+
+        $user = $actor ?? Auth::user();
+
+        return DB::transaction(function () use ($return, $user) {
+            $locked = OrderReturn::query()->lockForUpdate()->findOrFail($return->id);
+
+            // Re-check inside the transaction to defend against a race
+            // where another operator inspected or closed between the
+            // pre-tx check and the lock acquisition.
+            if ($locked->return_status !== 'Pending') {
+                throw new RuntimeException(
+                    "Return #{$locked->id} is no longer in 'Pending' (current: '{$locked->return_status}'). "
+                    . "Refresh the page to see the latest state."
+                );
+            }
+
+            $old = ['return_status' => $locked->return_status];
+
+            $locked->forceFill([
+                'return_status' => 'Received',
+                'updated_by' => $user?->id,
+            ])->save();
+
+            AuditLogService::log(
+                action: 'received',
+                module: 'returns',
+                recordType: OrderReturn::class,
+                recordId: $locked->id,
+                oldValues: $old,
+                newValues: ['return_status' => 'Received'],
             );
 
             return $locked->refresh();
