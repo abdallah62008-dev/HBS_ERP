@@ -229,6 +229,59 @@ class ReturnInventoryTest extends TestCase
         $this->assertSame('Confirmed', $order->fresh()->status);
     }
 
+    /**
+     * Phase 4A audit pin — closing a return must NOT write any
+     * inventory_movements row. Closure is a pure lifecycle marker; by
+     * the time it runs, inspection has already either kept the
+     * optimistic +qty (Restocked) or reversed it (Damaged), and on-hand
+     * is correct. Writing anything on close would double-count.
+     *
+     * This is the regression test for the Phase 4A audit. Without it, a
+     * future change that accidentally couples `ReturnService::close()`
+     * to inventory would slip past every existing test.
+     */
+    public function test_closing_return_does_not_create_inventory_movement(): void
+    {
+        $order = $this->placeOrderQty(2);
+        $this->orderService->changeStatus($order, 'Confirmed');
+        $this->satisfyShippingChecklist($order);
+        $this->orderService->changeStatus($order->fresh(), 'Shipped');
+        $this->orderService->changeStatus($order->fresh(), 'Delivered');
+        $this->orderService->changeStatus($order->fresh(), 'Returned');
+
+        // Open and inspect the return so it's eligible to close. We use
+        // Good + restockable so close() runs after a successful "no further
+        // movement" inspection, but the assertion below holds for either
+        // verdict — close() always writes zero rows.
+        $return = OrderReturn::create([
+            'order_id' => $order->id,
+            'customer_id' => $order->customer_id,
+            'return_reason_id' => ReturnReason::firstOrFail()->id,
+            'return_status' => 'Restocked',
+            'product_condition' => 'Good',
+            'refund_amount' => 0,
+            'shipping_loss_amount' => 0,
+            'restockable' => true,
+            'created_by' => $this->admin->id,
+            'updated_by' => $this->admin->id,
+            'inspected_by' => $this->admin->id,
+            'inspected_at' => now(),
+        ]);
+
+        $movementsBefore = InventoryMovement::count();
+        $onHandBefore = $this->inventory->onHandStock($this->product->id, null);
+
+        app(\App\Services\ReturnService::class)->close($return, 'Audit test closure.');
+
+        $this->assertSame('Closed', $return->fresh()->return_status);
+        $this->assertSame($movementsBefore, InventoryMovement::count(),
+            'Closing a return must NOT write any inventory_movements row — closure is a pure lifecycle marker.'
+        );
+        $this->assertSame($onHandBefore, $this->inventory->onHandStock($this->product->id, null),
+            'Closing a return must NOT change on-hand by even a single unit.'
+        );
+    }
+
     /** Satisfy every shipping-checklist gate so changeStatus('Shipped') passes. */
     private function satisfyShippingChecklist(Order $order): void
     {

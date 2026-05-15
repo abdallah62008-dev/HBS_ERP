@@ -108,6 +108,18 @@ Each phase below is **independently shippable**. Phase 0 is documentation only; 
 | **Commit strategy** | One focused commit per option: `Move return restock from status-change to inspection` (Option B). Single revertable unit. |
 | **Go / no-go** | **Needs explicit business approval** before any code is written. Specifically: is the operational risk of stock-inflation-between-status-change-and-inspection worse than the operational risk of stock-being-unavailable-until-inspection-completes? |
 | **Decision needed** | See "Open question 4" below. |
+| **Status** | 🟡 **Phase 4A — Audit complete; behaviour unchanged.** Phase 4B (the real implementation) is **blocked** on operations answering Q1, Q3, Q5 from `RETURNS_INVENTORY_AND_RESTOCKING_RULES.md §11`. |
+
+### Phase 4A — as-shipped notes (audit only, no behaviour change)
+
+- **No production code modified.** The current optimistic-restock model is the documented behaviour and remains in force.
+- **One test added** to close a coverage gap: `ReturnInventoryTest::test_closing_return_does_not_create_inventory_movement` pins that `close()` writes zero inventory rows. Without this regression test, a future coupling of close() to inventory would slip past every existing test.
+- **Decision documented in §11 of the inventory rules doc.** Phase 4B cannot be approved without answers to questions Q1 (Returned-to-inspected elapsed time), Q3 (damage rate), Q5 (real over-sell incidents). Phase 3's Received checkpoint just shipped — start collecting timestamp data from now.
+- **Anti-rules** (do NOT do these) recorded in the doc:
+  - Partial migration (change `OrderService` without changing `ReturnService::inspect` in lockstep)
+  - Adding an `expected_return` movement type without explicit buy-in (Option C)
+  - Bundling Phase 4 with any other Returns release
+  - Adding a per-return UI toggle for restock timing
 
 ---
 

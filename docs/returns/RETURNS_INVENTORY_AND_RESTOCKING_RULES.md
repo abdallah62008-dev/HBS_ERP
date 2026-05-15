@@ -189,10 +189,49 @@ Located at `tests/Feature/Returns/ReturnInventoryTest.php`:
 
 | Test | What it pins |
 |---|---|
-| `bug_a_delivered_to_returned_writes_return_to_stock` | Optimistic +qty is written on Delivered → Returned. |
-| `bug_a_pre_ship_to_returned_does_not_phantom_restock` | Pre-ship → Returned writes NO movement (no phantom +qty). |
-| `good_return_inspection_restores_full_on_hand` | Good + restockable inspection writes no further movement; on-hand stays at post-Returned level. |
-| `bug_b_damaged_return_does_not_double_decrement` | Damaged inspection writes exactly one −qty reversal; net change from post-ship baseline is zero. |
-| `bug_c_change_status_returns_flash_error_not_500` | The status transition surfaces errors as flash messages instead of 500. |
+| `ReturnInventoryTest::bug_a_delivered_to_returned_writes_return_to_stock` | Optimistic +qty is written on Delivered → Returned. |
+| `ReturnInventoryTest::bug_a_pre_ship_to_returned_does_not_phantom_restock` | Pre-ship → Returned writes NO movement (no phantom +qty). |
+| `ReturnInventoryTest::good_return_inspection_restores_full_on_hand` | Good + restockable inspection writes no further movement; on-hand stays at post-Returned level. |
+| `ReturnInventoryTest::bug_b_damaged_return_does_not_double_decrement` | Damaged inspection writes exactly one −qty reversal; net change from post-ship baseline is zero. |
+| `ReturnInventoryTest::bug_c_change_status_returns_flash_error_not_500` | The status transition surfaces errors as flash messages instead of 500. |
+| `ReturnInventoryTest::closing_return_does_not_create_inventory_movement` *(Phase 4A pin)* | `close()` writes zero inventory rows AND leaves on-hand unchanged. Pure lifecycle marker. |
+| `ReturnInspectionWorkflowTest::mark_received_does_not_create_inventory_movement` *(Phase 3)* | `markReceived()` writes zero inventory rows. |
+| `ReturnInspectionWorkflowTest::inspect_from_received_path_still_writes_correct_inventory_on_damaged` *(Phase 3)* | Damaged-after-Received writes exactly the same −qty reversal as Damaged-after-Pending. |
+| `ReturnInspectionWorkflowTest::inspect_from_received_path_writes_no_extra_movement_on_good_restockable` *(Phase 3)* | Good-after-Received writes zero further movements. |
 
 If Phase 4 ever changes to Option B, these tests must be updated in lockstep with the service change — partial migration is the most dangerous failure mode.
+
+---
+
+## 11. Phase 4A audit outcome (as-shipped: no behaviour change)
+
+Phase 4A was an **audit-only** phase. No production code was modified. The findings:
+
+- **Current optimistic model is correctly implemented** as documented in §1–§4. Every state transition writes (or doesn't write) the rows the design calls for.
+- **Test coverage was complete except for one gap:** there was no explicit regression test that `close()` writes zero inventory rows. That test now exists in `ReturnInventoryTest` (the `closing_return_does_not_create_inventory_movement` row above) and is **the only file changed** in Phase 4A.
+- **No real over-sell incident has been reported** that can be traced back to the inflation window — but the data to confidently rule it out hasn't been collected either.
+
+### Required operational data before Option B/C can be approved
+
+Phase 4 (the real implementation phase) is **blocked** on operations answering:
+
+1. **Q1 — Average elapsed time from `Order → Returned` to inspection verdict** (target: minutes vs. hours vs. days). Cheap to derive from `audit_logs` once Phase 3's Received timestamps accumulate.
+2. **Q2 — Average elapsed time from physical receipt to the `Received` checkpoint** (start collecting now — Phase 3 just shipped).
+3. **Q3 — Damage rate** (`product_condition` IN `Damaged`, `Missing Parts`, `Unknown`). Single SQL on `returns` over the last 30 days.
+4. **Q4 — Resale velocity for the top-50 returned SKUs**. Drives whether the inflation window is materially over-sellable.
+5. **Q5 — Has any real over-sell incident traced to a returned-but-not-inspected unit?** If no incidents in 6+ months of operations, Option A is correct forever.
+6. **Q6 — Which warehouses inspect on-the-spot vs. batch?** (Phase 3 unlocks batch — if no warehouse uses it, Phase 4 urgency drops.)
+7. **Q7 — Are orders ever marked `Returned` before the parcel is physically in transit back?** If yes, the inflation window is even longer than the inspection latency.
+8. **Q8 — Operational policy: should returned stock be sellable before inspection?** The yes/no answer to this is the policy fork between Option A (yes) and Option B (no).
+
+### Anti-rules (do not implement these)
+
+- **Do NOT remove the optimistic +qty in `OrderService::applyInventoryForTransition` alone.** Without also removing the −qty reversal in `ReturnService::inspect()`, on-hand will be permanently decremented for every Damaged return. The two changes are inseparable.
+- **Do NOT add an `expected_return` movement type without explicit business buy-in.** Option C requires changing every on-hand SUM query in the codebase — high blast radius for unproven operational benefit.
+- **Do NOT mix Phase 4 with any other Returns release.** Per the doc §5 warning, the migration must ship in a dedicated, revertible commit so any over-sell or stuck-stock incident can be rolled back without un-doing unrelated work.
+- **Do NOT add a per-return UI toggle for restock timing.** That's a policy decision, not a per-record decision — a UI knob would invite drift across warehouses.
+
+### What we DID change in Phase 4A
+
+- Added `tests/Feature/Returns/ReturnInventoryTest::test_closing_return_does_not_create_inventory_movement` — pinning that `close()` writes zero inventory rows. Pure regression test; no production code touched.
+- This document — appended this section. Restocking rules above §11 are unchanged.
