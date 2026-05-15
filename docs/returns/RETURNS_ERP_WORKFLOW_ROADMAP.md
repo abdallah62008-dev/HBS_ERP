@@ -143,6 +143,21 @@ Each phase below is **independently shippable**. Phase 0 is documentation only; 
 | **Risks** | Low — read-only. Performance risk if the query is unindexed; covered by adding indexes on `return_status`, `product_condition`, `inspected_at` if not already present. |
 | **Commit strategy** | `Add returns analytics report`. |
 | **Go / no-go** | Manager + Admin can open the report and see consistent numbers against ad-hoc spot-checks. |
+| **Status** | ✅ **Shipped.** Expanded the existing `/reports/returns` page in place; no new controller, no new route, no permission churn. |
+
+### Phase 7 — as-shipped notes
+
+- **No new controller / route / permission.** The placeholder `/reports/returns` route + `ReportsController::returns` + `ReportsService::returns` + `Reports/Returns.jsx` all pre-existed. Phase 7 expanded the service query and the page; nothing else moved.
+- **Permission gate kept at `reports.profit`.** The page surfaces financial-exposure totals (`refund_amount` + `shipping_loss_amount` sums) which are sensitive enough to deserve the existing slug. Roles that can open it today (super-admin, admin, manager, viewer) are unchanged.
+- **Metrics added on the service side:**
+  - `totals.active` and `totals.resolved` — derived from the `Active / Resolved` queue conventions pinned in `RETURNS_LIFECYCLE_AND_STATUSES.md §8`.
+  - `by_status` — zero-filled over every `OrderReturn::STATUSES` value (so missing buckets are visible, not hidden).
+  - `by_condition` — zero-filled over every `OrderReturn::CONDITIONS` value (separate axis from status — an Inspected return can still be Good).
+  - `top_products` — joins `returns → orders → order_items → products`, counts distinct returns AND sums returned units, limit 10.
+  - `status_groups` — the same active/resolved split the index page exposes, so the frontend never hard-codes the lists.
+- **Page redesign keeps refund exposure SEPARATE from shipping loss.** The previous "Refunds + losses" combined card hid two distinct money concerns (intent vs. absorbed shipping cost). Phase 7 splits them into two cards and adds a restock-rate stat alongside.
+- **Tests added:** `tests/Feature/Returns/ReturnReportsTest.php` (10 tests, 96 assertions). Pins permission gating (with/without `reports.profit`, with/without `reports.view`), the prop shape (every metric), date-range filtering, and the read-only contract (no return / refund / cashbox mutation on opening the report).
+- **Open question 7 — headline metric.** The page intentionally does NOT pick a single "headline" return metric — the first row shows Total / Active / Resolved / Damaged, the second row shows Refund exposure / Shipping loss / Restocked / Restock rate. If ops wants a single headline KPI, surface that on the dashboard instead of redesigning this page.
 
 ---
 

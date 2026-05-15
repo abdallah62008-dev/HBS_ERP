@@ -182,6 +182,26 @@ Today the StatusBadge component picks its color based on the value text; adding 
 
 ---
 
+## 6.ter. `/reports/returns` — the analytics surface (Phase 7)
+
+| Block | Contents | Notes |
+|---|---|---|
+| **`ReportFilters` row** | From / To date inputs + *Apply* button + *Last 7d / 30d / 90d* preset chips. | Shared component with every other report page — do NOT diverge from the shared filter UX. |
+| **Row 1 — lifecycle volume (4 cards)** | Total returns · Active · Resolved · Damaged returns. Each non-total card shows a percent-of-total hint. | Active = `{Pending, Received, Inspected, Damaged}`; Resolved = `{Restocked, Closed}`. Pinned in `ReportsService::returns()` and mirrored from `RETURNS_LIFECYCLE_AND_STATUSES.md §8`. |
+| **Row 2 — money exposure (4 cards)** | Refund exposure · Shipping loss · Restocked · Restock rate. | Refund and shipping loss are **separate cards** — they're different concerns (intent vs. absorbed cost). Restock rate is `Restocked / (Restocked + Damaged)`, i.e. the share of inspection-decided returns that returned to sellable stock. |
+| **By status panel** | One row per `OrderReturn::STATUSES` value, **zero-filled** so empty buckets are visible. Each row: status badge, bucket label (Active/Resolved), count, share. | Zero-fill is intentional — a manager glancing at the report should see "0 Closed" rather than have to infer absence. |
+| **By condition panel** | One row per `OrderReturn::CONDITIONS` value, **zero-filled**. Each row: condition badge, count, share. | Separate axis from status. An `Inspected` return can still be `Good`; an `Inspected` return can be `Damaged`. |
+| **By reason panel** | One row per actually-used `return_reason`. Sorted by count desc. | Not zero-filled — listing every dormant reason would crowd the panel. |
+| **Top returned products panel** | Up to 10 rows. SKU + name + distinct returns count + summed unit count. | Joins through `order_items` — a single return can span multiple SKUs. |
+
+### Don't
+
+- Don't sum refund exposure and shipping loss into a single card. The previous "Refunds + losses" combined number hid the two distinct concerns operators need to read separately.
+- Don't drop the zero-filled rows. Empty buckets ARE the signal in many cases (e.g. a sudden `Damaged: 12` row jumping out of a sea of zeros).
+- Don't add additional permission slugs to this page. The existing `reports.profit` gate is correct for the financial-exposure data the page surfaces; adding a slug would force a seeder change for no role-set delta.
+
+---
+
 ## 7. Empty states — the dropping return problem
 
 Phase 1's biggest UX risk: when the operator just closed a return and lands on `/returns`, the just-closed item is now invisible. The empty-state copy *must* explain where it went.

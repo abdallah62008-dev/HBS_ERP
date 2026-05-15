@@ -211,7 +211,27 @@ This is a **manual** checklist — automated tests cover the contract, this list
 
 ---
 
-## 17. Audit / history remains traceable
+## 17. Returns analytics report (Phase 7)
+
+| Step | Expected | ✓ |
+|---|---|:--:|
+| Log in as **Manager** (or any role with `reports.profit`). | | |
+| Open `/reports` and click *Returns*, OR go directly to `/reports/returns`. | Lands on the Returns analytics page. The page subtitle reads `from → to` for the current date range (defaults to the current month). | |
+| First-row cards visible: *Total / Active / Resolved / Damaged*. | All four show numeric counts. Active + Resolved = Total. Each (except Total) shows a percentage hint of its share. | |
+| Second-row cards visible: *Refund exposure / Shipping loss / Restocked / Restock rate*. | Refund exposure and shipping loss are **separate cards** (not summed). Restock rate is `Restocked / (Restocked + Damaged)`. | |
+| Open the **By status** panel. | All six status values present (zero-filled for empty buckets). Each row shows count + share-of-total + active/resolved bucket label. | |
+| Open the **By condition** panel. | All four `product_condition` values present (zero-filled). | |
+| Open the **By reason** panel. | One row per used `return_reason`. Sorted by count descending. | |
+| Open the **Top returned products** panel. | Up to 10 SKUs with the most distinct returns in the period. Returns count + unit count, descending. | |
+| Use the *Last 7d / 30d / 90d* preset chips. | URL updates with `?from=...&to=...`. Every metric (totals, breakdowns, top products) recomputes for the new range. | |
+| Set a custom `from` and `to` date and click *Apply*. | Same recompute as the presets. | |
+| Log in as a user with **`reports.view` only** (no `reports.profit`). | `/reports/returns` returns 403 — the financial-exposure totals stay hidden from non-finance roles. | |
+| Log in as a user with **no `reports.*` slugs** (e.g. order-agent). | Cannot reach `/reports` at all (parent-group 403). | |
+| Spot-check: the count of `Pending` rows on `/reports/returns` (status filter chip) equals the *Pending* row on `/returns` (per-status chip). | Numbers agree. The two pages share the same `return_status` source. | |
+
+---
+
+## 18. Audit / history remains traceable
 
 | Step | Expected | ✓ |
 |---|---|:--:|

@@ -280,13 +280,24 @@ class ReportsService
     public function returns(?string $from, ?string $to): array
     {
         ['from' => $from, 'to' => $to] = $this->dateRange($from, $to);
+        $fromTs = $from . ' 00:00:00';
+        $toTs = $to . ' 23:59:59';
+
+        // Active/Resolved sets mirror the Returns Index queue conventions
+        // (see RETURNS_LIFECYCLE_AND_STATUSES.md §8). Pinned in code so a
+        // future status addition that doesn't update both sides becomes
+        // visible at test time.
+        $activeStatuses = ['Pending', 'Received', 'Inspected', 'Damaged'];
+        $resolvedStatuses = ['Restocked', 'Closed'];
 
         $totals = OrderReturn::query()
-            ->whereBetween('created_at', [$from . ' 00:00:00', $to . ' 23:59:59'])
+            ->whereBetween('created_at', [$fromTs, $toTs])
             ->selectRaw('
                 COUNT(*) AS total,
                 SUM(CASE WHEN return_status = "Restocked" THEN 1 ELSE 0 END) AS restocked,
                 SUM(CASE WHEN return_status = "Damaged" THEN 1 ELSE 0 END) AS damaged,
+                SUM(CASE WHEN return_status IN ("Pending","Received","Inspected","Damaged") THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN return_status IN ("Restocked","Closed") THEN 1 ELSE 0 END) AS resolved,
                 COALESCE(SUM(refund_amount), 0) AS refund_total,
                 COALESCE(SUM(shipping_loss_amount), 0) AS shipping_loss_total
             ')
@@ -294,13 +305,82 @@ class ReportsService
 
         $byReason = OrderReturn::query()
             ->join('return_reasons', 'return_reasons.id', '=', 'returns.return_reason_id')
-            ->whereBetween('returns.created_at', [$from . ' 00:00:00', $to . ' 23:59:59'])
+            ->whereBetween('returns.created_at', [$fromTs, $toTs])
             ->selectRaw('return_reasons.name AS reason, COUNT(returns.id) AS count')
             ->groupBy('return_reasons.name')
             ->orderByDesc('count')
             ->get();
 
-        return ['from' => $from, 'to' => $to, 'totals' => $totals, 'by_reason' => $byReason];
+        // Phase 7 — by-status breakdown over the period. Returned as a
+        // dense array (every status present, zero-filled) so the frontend
+        // never has to guess which buckets are missing.
+        $statusCounts = OrderReturn::query()
+            ->whereBetween('created_at', [$fromTs, $toTs])
+            ->selectRaw('return_status, COUNT(*) AS count')
+            ->groupBy('return_status')
+            ->pluck('count', 'return_status')
+            ->all();
+        $byStatus = [];
+        foreach (OrderReturn::STATUSES as $status) {
+            $byStatus[] = [
+                'status' => $status,
+                'count' => (int) ($statusCounts[$status] ?? 0),
+                'bucket' => in_array($status, $resolvedStatuses, true) ? 'resolved' : 'active',
+            ];
+        }
+
+        // Phase 7 — product-condition breakdown (separate axis from
+        // return_status; an Inspected return can still be Good).
+        $conditionCounts = OrderReturn::query()
+            ->whereBetween('created_at', [$fromTs, $toTs])
+            ->whereNotNull('product_condition')
+            ->selectRaw('product_condition, COUNT(*) AS count')
+            ->groupBy('product_condition')
+            ->pluck('count', 'product_condition')
+            ->all();
+        $byCondition = [];
+        foreach (OrderReturn::CONDITIONS as $condition) {
+            $byCondition[] = [
+                'condition' => $condition,
+                'count' => (int) ($conditionCounts[$condition] ?? 0),
+            ];
+        }
+
+        // Phase 7 — top returned products. A single return can span many
+        // order_items, so we count (a) distinct returns the product
+        // appears in and (b) the sum of returned units. Returns where
+        // the order has no items are silently excluded by the inner join.
+        $topProducts = DB::table('returns AS r')
+            ->join('orders AS o', 'o.id', '=', 'r.order_id')
+            ->join('order_items AS oi', 'oi.order_id', '=', 'o.id')
+            ->join('products AS p', 'p.id', '=', 'oi.product_id')
+            ->whereBetween('r.created_at', [$fromTs, $toTs])
+            ->selectRaw('
+                p.id AS product_id,
+                p.sku,
+                p.name,
+                COUNT(DISTINCT r.id) AS return_count,
+                COALESCE(SUM(oi.quantity), 0) AS unit_count
+            ')
+            ->groupBy('p.id', 'p.sku', 'p.name')
+            ->orderByDesc('return_count')
+            ->orderByDesc('unit_count')
+            ->limit(10)
+            ->get();
+
+        return [
+            'from' => $from,
+            'to' => $to,
+            'totals' => $totals,
+            'by_reason' => $byReason,
+            'by_status' => $byStatus,
+            'by_condition' => $byCondition,
+            'top_products' => $topProducts,
+            'status_groups' => [
+                'active' => $activeStatuses,
+                'resolved' => $resolvedStatuses,
+            ],
+        ];
     }
 
     /**
