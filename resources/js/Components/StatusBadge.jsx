@@ -25,6 +25,17 @@ const AUTO = {
     'Cancelled': 'neutral',
     'On Hold': 'warning',
     'Need Review': 'warning',
+    // Return statuses (see docs/returns/RETURNS_UI_UX_GUIDELINES.md §6)
+    'Pending': 'warning',     // needs work
+    'Received': 'info',       // progress, no decision yet
+    'Inspected': 'indigo',    // nearly decided
+    'Restocked': 'success',   // good outcome, stock recovered
+    'Damaged': 'danger',      // bad outcome — shared with product_condition
+    'Closed': 'neutral',      // finalised, no further action
+    // Product conditions (Damaged shares the same red tone as the status)
+    'Good': 'success',
+    'Missing Parts': 'warning',
+    'Unknown': 'neutral',
     // Risk levels
     'Low': 'success',
     'Medium': 'warning',

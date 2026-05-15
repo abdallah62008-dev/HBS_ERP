@@ -214,9 +214,18 @@ export default function ReturnsIndex({
                     <tbody className="divide-y divide-slate-100">
                         {returnsList.data.length === 0 && (
                             <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-slate-400">
-                                {isActiveView && counts.resolved > 0
-                                    ? `No active returns. ${counts.resolved} resolved are under Resolved.`
-                                    : 'No returns to show.'}
+                                {isActiveView && counts.resolved > 0 ? (
+                                    <>
+                                        No active returns. {counts.resolved} resolved are under{' '}
+                                        <button
+                                            type="button"
+                                            onClick={() => apply('resolved')}
+                                            className="font-medium text-indigo-600 hover:underline"
+                                        >
+                                            Resolved
+                                        </button>.
+                                    </>
+                                ) : 'No returns to show.'}
                             </td></tr>
                         )}
                         {returnsList.data.map((r) => (
