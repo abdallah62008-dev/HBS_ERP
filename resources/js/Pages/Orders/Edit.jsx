@@ -12,6 +12,7 @@ export default function OrderEdit({
     can_create_return = false,
     can_view_profit = false,
     has_return = false,
+    existing_return = null,
 }) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
@@ -164,10 +165,10 @@ export default function OrderEdit({
                     </div>
 
                     {/* Helper hint when the operator cannot select Returned. */}
-                    {has_return && order.status !== 'Returned' && (
+                    {has_return && order.status !== 'Returned' && existing_return && (
                         <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
                             This order already has a return record —
-                            <Link href={route('returns.show', { return: order.returns?.[0]?.id ?? '' })} className="ml-1 underline">
+                            <Link href={route('returns.show', existing_return.id)} className="ml-1 underline">
                                 open the return
                             </Link>
                             to manage it. The Returned status option is hidden here to prevent duplicates.

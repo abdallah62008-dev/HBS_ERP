@@ -26,6 +26,7 @@ export default function OrderShow({
     return_conditions = ['Good', 'Damaged', 'Missing Parts', 'Unknown'],
     can_create_return = false,
     has_return = false,
+    existing_return = null,
 }) {
     const can = useCan();
     const { props } = usePage();
@@ -115,12 +116,27 @@ export default function OrderShow({
                 subtitle={`${order.customer_name} · ${order.customer_phone}${order.external_order_reference ? ` · Ext: ${order.external_order_reference}` : ''}`}
                 actions={
                     <div className="flex gap-2">
+                        {/* Professional Return Management — when this order
+                            already has a return, surface a direct link to
+                            the return page. Without it the operator's only
+                            path is via Edit, where it's easy to start
+                            editing order fields instead of managing the
+                            return. */}
+                        {existing_return && can('returns.view') && (
+                            <Link
+                                href={route('returns.show', existing_return.id)}
+                                className="rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700"
+                                title={`Open return #${existing_return.id} (status: ${existing_return.return_status})`}
+                            >
+                                Manage return
+                            </Link>
+                        )}
                         <Link href={route('orders.timeline', order.id)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50">
                             Timeline
                         </Link>
                         {can('orders.edit') && (
                             <Link href={route('orders.edit', order.id)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50">
-                                Edit
+                                Edit order
                             </Link>
                         )}
                         {can('orders.change_status') && (
@@ -145,7 +161,7 @@ export default function OrderShow({
             />
 
             {/* Status row */}
-            <div className="mb-5 flex flex-wrap items-center gap-2">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
                 <StatusBadge value={order.status} />
                 <span className="text-xs text-slate-400">Shipping: <StatusBadge value={order.shipping_status} /></span>
                 <span className="text-xs text-slate-400">Collection: <StatusBadge value={order.collection_status} /></span>
@@ -156,6 +172,29 @@ export default function OrderShow({
                 )}
                 <StatusBadge value={order.customer_risk_level} />
             </div>
+
+            {/* Return-record banner — surfaces the linked return so the
+                operator manages it on the Return page (where reason,
+                condition, inspection, refund, and close actions live)
+                instead of accidentally editing order fields. */}
+            {existing_return && (
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <span>
+                        This order has a return record <span className="font-mono">#{existing_return.id}</span>
+                        {' '}— status <strong>{existing_return.return_status}</strong>
+                        {existing_return.product_condition ? <> · condition <strong>{existing_return.product_condition}</strong></> : null}.
+                        {' '}Manage reason, condition, refund and close from the return page.
+                    </span>
+                    {can('returns.view') && (
+                        <Link
+                            href={route('returns.show', existing_return.id)}
+                            className="font-medium text-amber-900 underline hover:text-amber-700"
+                        >
+                            Open return →
+                        </Link>
+                    )}
+                </div>
+            )}
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 {/* Items */}

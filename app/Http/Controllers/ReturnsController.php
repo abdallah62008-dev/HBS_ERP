@@ -29,13 +29,79 @@ class ReturnsController extends Controller
     {
         $filters = $request->only(['status', 'q']);
 
+        // Active vs resolved split. Once a return reaches a resolved
+        // status it has left the active workflow. The list defaults to
+        // Active so the operator's queue isn't cluttered by finished
+        // work; Resolved / All tabs and per-status drill-downs recover
+        // history without ambiguity.
+        $resolvedStatuses = ['Restocked', 'Closed'];
+        $activeStatuses = array_values(array_diff(OrderReturn::STATUSES, $resolvedStatuses));
+        $statusFilter = $filters['status'] ?? null;
+
+        // Compute counts BEFORE applying the status filter so each tab's
+        // count is stable (the search `q` filter is shared and applied
+        // to counts too, so search refines all three buckets together).
+        $countsBase = OrderReturn::query()
+            ->when($filters['q'] ?? null, function ($q, $term) {
+                $q->whereHas('order', fn ($o) => $o->where('order_number', 'like', "%{$term}%")
+                    ->orWhere('customer_name', 'like', "%{$term}%"));
+            });
+
+        // Single grouped query — one round-trip, six rows.
+        $rawByStatus = (clone $countsBase)
+            ->selectRaw('return_status, COUNT(*) as c')
+            ->groupBy('return_status')
+            ->pluck('c', 'return_status')
+            ->all();
+
+        $byStatus = [];
+        foreach (OrderReturn::STATUSES as $s) {
+            $byStatus[$s] = (int) ($rawByStatus[$s] ?? 0);
+        }
+        $activeCount = array_sum(array_intersect_key($byStatus, array_flip($activeStatuses)));
+        $resolvedCount = array_sum(array_intersect_key($byStatus, array_flip($resolvedStatuses)));
+        $allCount = $activeCount + $resolvedCount;
+
+        // view_mode tells the frontend which tab/chip is currently
+        // selected without it having to re-derive the rule. Values:
+        //   'active'   — the default (no status param)
+        //   'resolved' — ?status=resolved
+        //   'all'      — ?status=all
+        //   'status:X' — ?status=<one of OrderReturn::STATUSES>
+        $viewMode = match (true) {
+            $statusFilter === 'all' => 'all',
+            $statusFilter === 'resolved' => 'resolved',
+            $statusFilter && in_array($statusFilter, OrderReturn::STATUSES, true) => 'status:' . $statusFilter,
+            default => 'active',
+        };
+
         $returnsList = OrderReturn::query()
             ->with([
                 'order:id,order_number,customer_name,customer_phone,total_amount',
                 'returnReason:id,name',
                 'inspectedBy:id,name',
             ])
-            ->when($filters['status'] ?? null, fn ($q, $v) => $q->where('return_status', $v))
+            ->when(
+                $statusFilter,
+                function ($q, $v) use ($resolvedStatuses) {
+                    if ($v === 'all') {
+                        return; // no status filter — include resolved + active
+                    }
+                    if ($v === 'resolved') {
+                        $q->whereIn('return_status', $resolvedStatuses);
+                        return;
+                    }
+                    if (in_array($v, OrderReturn::STATUSES, true)) {
+                        $q->where('return_status', $v);
+                    }
+                },
+                function ($q) use ($resolvedStatuses) {
+                    // Default (no `status` query string) — active returns
+                    // only, so the resent/restocked/closed history doesn't
+                    // clutter the operator's queue.
+                    $q->whereNotIn('return_status', $resolvedStatuses);
+                }
+            )
             ->when($filters['q'] ?? null, function ($q, $term) {
                 $q->whereHas('order', fn ($o) => $o->where('order_number', 'like', "%{$term}%")
                     ->orWhere('customer_name', 'like', "%{$term}%"));
@@ -48,6 +114,19 @@ class ReturnsController extends Controller
             'returns' => $returnsList,
             'filters' => $filters,
             'reasons' => ReturnReason::where('status', 'Active')->orderBy('name')->get(['id', 'name']),
+            // Surface the active/resolved split so the frontend can label
+            // its filter chips without hard-coding the values twice.
+            'status_groups' => [
+                'active' => $activeStatuses,
+                'resolved' => $resolvedStatuses,
+            ],
+            'counts' => [
+                'active' => $activeCount,
+                'resolved' => $resolvedCount,
+                'all' => $allCount,
+                'by_status' => $byStatus,
+            ],
+            'view_mode' => $viewMode,
         ]);
     }
 

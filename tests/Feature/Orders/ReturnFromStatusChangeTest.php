@@ -427,6 +427,55 @@ class ReturnFromStatusChangeTest extends TestCase
                 ->has('return_conditions', 4)
                 ->where('can_create_return', true)
                 ->where('has_return', false)
+                // Professional Return Management — when there is no
+                // return yet, `existing_return` is explicitly null so
+                // the frontend's Manage-return button / banner stays
+                // hidden.
+                ->where('existing_return', null)
+            );
+    }
+
+    public function test_orders_show_and_edit_expose_existing_return_when_a_return_exists(): void
+    {
+        // After a Returned transition the operator should be able to
+        // reach the return page directly from BOTH Orders/Show and
+        // Orders/Edit — the controllers must surface the return's
+        // id / status / condition so the frontend can render a
+        // "Manage return" link to /returns/{id}.
+        $user = $this->userWith(['orders.view', 'orders.edit', 'orders.change_status', 'returns.create', 'returns.view']);
+        $order = $this->deliveredOrder();
+
+        // Create the return via the supported atomic-flow endpoint.
+        $this->actingAs($user)
+            ->post('/orders/' . $order->id . '/status', [
+                'status' => 'Returned',
+                'return' => [
+                    'return_reason_id' => $this->reason->id,
+                    'product_condition' => 'Good',
+                ],
+            ])->assertRedirect();
+
+        $return = OrderReturn::where('order_id', $order->id)->firstOrFail();
+
+        // Orders/Show exposes existing_return.
+        $this->actingAs($user)->get('/orders/' . $order->id)
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page
+                ->component('Orders/Show')
+                ->where('has_return', true)
+                ->where('existing_return.id', $return->id)
+                ->where('existing_return.return_status', $return->return_status)
+                ->where('existing_return.product_condition', 'Good')
+            );
+
+        // Orders/Edit exposes existing_return (symmetric — the same
+        // banner/hint logic runs on the Edit page).
+        $this->actingAs($user)->get('/orders/' . $order->id . '/edit')
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page
+                ->component('Orders/Edit')
+                ->where('has_return', true)
+                ->where('existing_return.id', $return->id)
             );
     }
 

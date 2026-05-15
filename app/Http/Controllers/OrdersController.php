@@ -351,7 +351,17 @@ class OrdersController extends Controller
         // the user picks `Returned`, AND can hide the Returned option
         // entirely when it isn't valid (no returns.create permission,
         // or the order already has a return).
-        $hasReturn = $order->returns()->exists();
+        //
+        // Professional Return Management — also surface the actual
+        // return record (id + status + condition) so Orders/Show can
+        // render a "Manage Return" link directly to /returns/{id}.
+        // Without this the operator's only path to the return is via
+        // the Edit page, where they often start editing order fields
+        // instead of opening the return.
+        $existingReturn = $order->returns()
+            ->latest('id')
+            ->first(['id', 'return_status', 'product_condition']);
+        $hasReturn = $existingReturn !== null;
         $user = request()->user();
 
         // Defence-in-depth: hide cost/profit columns from the JSON when
@@ -370,6 +380,7 @@ class OrdersController extends Controller
             'can_create_return' => (bool) ($user?->hasPermission('returns.create')),
             'can_view_profit' => (bool) ($user?->hasPermission('orders.view_profit')),
             'has_return' => $hasReturn,
+            'existing_return' => $existingReturn,
         ]);
     }
 
@@ -384,7 +395,10 @@ class OrdersController extends Controller
         // the linked return atomically. We pass the same props the
         // Show page uses so the JSX can render identical fields.
         $user = request()->user();
-        $hasReturn = $order->returns()->exists();
+        $existingReturn = $order->returns()
+            ->latest('id')
+            ->first(['id', 'return_status', 'product_condition']);
+        $hasReturn = $existingReturn !== null;
 
         // Strip cost/profit columns from the JSON when the user lacks
         // `orders.view_profit`. Edit.jsx also gates the visible blocks
@@ -401,6 +415,7 @@ class OrdersController extends Controller
             'can_create_return' => (bool) $user?->hasPermission('returns.create'),
             'can_view_profit' => (bool) $user?->hasPermission('orders.view_profit'),
             'has_return' => $hasReturn,
+            'existing_return' => $existingReturn,
         ]);
     }
 
