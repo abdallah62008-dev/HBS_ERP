@@ -39,7 +39,7 @@ class Order extends Model
         'source', 'external_order_reference', 'entry_code',
         'status', 'collection_status', 'shipping_status',
         'customer_name', 'customer_phone', 'customer_phone_secondary',
-        'customer_phone_whatsapp', 'customer_address',
+        'customer_phone_whatsapp', 'customer_phone_normalized', 'customer_address',
         'city', 'governorate', 'country',
         'currency_code',
         'subtotal', 'discount_amount', 'shipping_amount', 'tax_amount', 'extra_fees',

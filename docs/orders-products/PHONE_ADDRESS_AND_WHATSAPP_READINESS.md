@@ -1,6 +1,43 @@
 # Phone, Address & WhatsApp Readiness
 
-> Status: **DESIGN ONLY.**
+> Status: **Phone normalization shipped in O-2 (2026-05-17).** Address hierarchy (districts, FK columns) remains design-only — Phase O-3.
+
+## 0. O-2 shipped scope (2026-05-17)
+
+### Schema (2 additive migrations, both idempotent on re-run)
+
+- `2026_05_17_200000_add_phone_normalization_to_customers.php` — adds the triple on `customers`:
+  - `country_code` (varchar 8, nullable)
+  - `local_phone` (varchar 32, nullable)
+  - `normalized_phone` (varchar 20, nullable, **indexed**)
+  - `secondary_country_code` / `secondary_local_phone` / `secondary_normalized_phone` (same shape)
+- `2026_05_17_200001_add_customer_phone_normalized_to_orders.php` — adds `customer_phone_normalized` (varchar 20, nullable, **indexed**) to `orders` as a per-order snapshot.
+
+### Service + validation
+- `App\Services\PhoneNormalizationService` — parses raw input + optional country hint → triple. Per-country rules live in `COUNTRY_RULES` constant (EG `+20`, SA `+966`, UAE `+971`, IQ `+964`). Pure, DB-free, idempotent.
+- `StoreCustomerRequest` / `UpdateCustomerRequest` — `country_code` validated against the allow-list. `withValidator()` after-hook runs `PhoneNormalizationService::normalize()` against `primary_phone` and `secondary_phone`; bad inputs return 422 with field-level errors.
+- `CustomersController::store/update` — `withNormalizedPhones()` private helper materializes the triple onto every customer write.
+- `OrderService::createFromPayload` — snapshots `customer->normalized_phone` to `orders.customer_phone_normalized` at order creation.
+- `DuplicateDetectionService` — Rule 1 (same primary phone, recent) now queries `customer_phone_normalized` first, with a legacy raw-string fallback for orders that pre-date the snapshot. Falls back gracefully so un-backfilled orders still surface where the legacy compare would have found them.
+- `Customer::whatsappUrl()` accessor — `https://wa.me/<E.164 sans plus>` when the customer opted in; `null` when they opted out or no normalized number is set.
+
+### UI
+- Customer Create/Edit form (`resources/js/Pages/Customers/Form.jsx`):
+  - Country code dropdown next to each phone input (Egypt / Saudi / UAE / Iraq).
+  - Inline "Saved as `<E.164>`" hint on the primary phone (only when the form already has a normalized value to show).
+  - WhatsApp opt-in checkbox surfaced on the form (was implicit on the customer record).
+- Customer Show — primary phone now displays the E.164 form in mono-space below the local form, with a `🟢 WhatsApp` click-to-chat button when the customer opted in.
+- Customer index search — searches both the raw `primary_phone`/`secondary_phone` columns AND `normalized_phone`/`secondary_normalized_phone`, so an operator searching `+201012345678` finds a customer whose phone was typed as `01012345678`.
+
+### Backfill
+- `php artisan customers:backfill-phones` — idempotent command that parses each customer with `normalized_phone IS NULL` using the chosen country hint (defaults to `+20`). Side effect: also fills `orders.customer_phone_normalized` for that customer's existing orders that don't yet have a snapshot. Supports `--country=<code>`, `--dry-run`, and `--limit=<n>`. Failures log to stdout without crashing — bad rows simply keep `normalized_phone = NULL` for manual review.
+
+### Deferred from this phase
+- ⛔ **Unique index on `normalized_phone`.** Promoting to a unique constraint before backfill verification would block inserts on real duplicates. The doc-spec dedupe surface (Phase 8 `customers.merge_duplicate` workflow) is the right gate.
+- ⛔ **`countries` table extension** (`dial_code`, `national_prefix`, `mobile_*` columns). PHP constants in `PhoneNormalizationService::COUNTRY_RULES` are equivalent for O-2 and don't require a schema change. Promoting to a DB lookup is a follow-up phase only if the rule set grows.
+- ⛔ **`customers.merge_duplicate` permission slug** — added when the merge UI ships.
+- ⛔ **`customer_addresses` phone triple** — `customer_addresses` is rarely populated today; defer until address-book usage justifies it.
+- ⛔ **Address hierarchy** (`districts` table, `country_id` / `state_id` / `city_id` / `district_id` FKs) — Phase O-3.
 
 ---
 

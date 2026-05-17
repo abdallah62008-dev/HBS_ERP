@@ -128,6 +128,10 @@ class OrderService
                 'customer_phone_whatsapp' => array_key_exists('customer_phone_whatsapp', $payload)
                     ? (bool) $payload['customer_phone_whatsapp']
                     : (bool) ($customer->primary_phone_whatsapp ?? true),
+                // O-2: E.164 phone snapshot. Stays null when the customer
+                // wasn't backfilled (`normalized_phone` is nullable) so
+                // historical orders aren't blocked by a missing value.
+                'customer_phone_normalized' => $customer->normalized_phone,
                 'customer_address' => $payload['customer_address'],
                 'city' => $payload['city'] ?? $customer->city,
                 'governorate' => $payload['governorate'] ?? $customer->governorate,

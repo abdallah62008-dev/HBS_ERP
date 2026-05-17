@@ -9,6 +9,13 @@ export default function CustomerEdit({ customer, tags, locations = [] }) {
         name: customer.name ?? '',
         primary_phone: customer.primary_phone ?? '',
         secondary_phone: customer.secondary_phone ?? '',
+        // O-2: hydrate the phone triple from the saved customer. Falls
+        // back to +20 when the customer pre-dates O-2 (backfill not yet
+        // run for that record).
+        country_code: customer.country_code ?? '+20',
+        secondary_country_code: customer.secondary_country_code ?? '+20',
+        normalized_phone: customer.normalized_phone ?? null,
+        primary_phone_whatsapp: customer.primary_phone_whatsapp !== false,
         email: customer.email ?? '',
         city: customer.city ?? '',
         governorate: customer.governorate ?? '',

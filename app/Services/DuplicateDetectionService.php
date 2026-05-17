@@ -68,9 +68,25 @@ class DuplicateDetectionService
         $productIds = collect($payload['product_ids'] ?? [])->filter()->unique();
 
         // ── Rule 1: same primary phone, recent ──────────────────────────
+        // O-2: also match by the E.164 snapshot on orders. Backfilled
+        // orders carry `customer_phone_normalized`; we resolve the raw
+        // input through PhoneNormalizationService and try the indexed
+        // column first. Falls back to the legacy raw-string compare so
+        // un-backfilled orders are still surfaced (no behaviour
+        // regression during the cut-over period).
         if ($phone) {
+            $normalized = $this->normalizeForLookup($payload['primary_phone'] ?? null);
+
             $recent = Order::query()
-                ->whereRaw("REPLACE(REPLACE(REPLACE(customer_phone, ' ', ''), '-', ''), '+', '') = ?", [$phone])
+                ->where(function ($q) use ($normalized, $phone) {
+                    if ($normalized !== null) {
+                        $q->where('customer_phone_normalized', $normalized);
+                    }
+                    $q->orWhereRaw(
+                        "REPLACE(REPLACE(REPLACE(customer_phone, ' ', ''), '-', ''), '+', '') = ?",
+                        [$phone],
+                    );
+                })
                 ->where('created_at', '>=', Carbon::now()->subDays(self::SAME_PHONE_DAYS))
                 ->limit(20)
                 ->pluck('id');
@@ -189,6 +205,18 @@ class DuplicateDetectionService
         }
 
         return preg_replace('/[\s\-+]/', '', $phone) ?? '';
+    }
+
+    /**
+     * O-2: produce the E.164 normalized form for lookup, or null when
+     * the raw input cannot be parsed. Used to query the indexed
+     * `customer_phone_normalized` column on orders.
+     */
+    private function normalizeForLookup(?string $raw): ?string
+    {
+        if ($raw === null || trim($raw) === '') return null;
+        $res = app(\App\Services\PhoneNormalizationService::class)->normalize($raw);
+        return $res['valid'] ? $res['normalized_phone'] : null;
     }
 
     public static function normaliseAddress(?string $address): string

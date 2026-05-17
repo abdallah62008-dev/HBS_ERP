@@ -12,6 +12,11 @@ export default function CustomerCreate({ locations = [], default_country_code = 
         name: '',
         primary_phone: '',
         secondary_phone: '',
+        // O-2: country dial codes default to Egypt for the EG-first user base.
+        // The backend recomputes the normalized triple from these fields.
+        country_code: '+20',
+        secondary_country_code: '+20',
+        primary_phone_whatsapp: true,
         email: '',
         city: '',
         governorate: '',

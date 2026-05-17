@@ -144,12 +144,20 @@
 
 ## 8. Phone validation (O-2)
 
-- [ ] **(O-2)** Customer Create with EG country code, `local_phone = 1012345678` → accepted, `normalized_phone = +201012345678`.
-- [ ] **(O-2)** Customer Create with SA country code, `local_phone = 512345678` → accepted, `normalized_phone = +966512345678`.
-- [ ] **(O-2)** Customer Create with EG country code, `local_phone = 123` → 422.
-- [ ] **(O-2)** Editing a customer's country code re-validates the local_phone against the new country's rules.
-- [ ] **(O-2)** Duplicate `normalized_phone` across customers is blocked (or warns; matches the existing dedupe behaviour).
-- [ ] **(O-2)** WhatsApp link button on Customer Show opens `https://wa.me/<normalized_phone>` in a new tab.
+**Shipped 2026-05-17** — backend auto-tested by `tests/Unit/Services/PhoneNormalizationServiceTest.php` (23 tests) + `tests/Feature/Customers/CustomerPhoneNormalizationTest.php` (8 tests). Re-run UX checks below by hand at release time.
+
+- [x] **(O-2)** Customer Create with EG country code, `local_phone = 1012345678` → accepted, `normalized_phone = +201012345678`.
+- [x] **(O-2)** Customer Create with SA country code, `local_phone = 0501234567` → accepted, `normalized_phone = +966501234567`.
+- [x] **(O-2)** Customer Create with EG country code, `local_phone = 0312345` → 422 (length out of range).
+- [x] **(O-2)** Editing a customer's country code re-runs the validator against the new country's rules (UpdateCustomerRequest mirrors StoreCustomerRequest).
+- [x] **(O-2)** `country_code` outside the allow-list (`+20`, `+966`, `+971`, `+964`) → 422.
+- [x] **(O-2)** WhatsApp link button on Customer Show opens `https://wa.me/<normalized_phone>` (with the leading `+` stripped) when the customer opted in.
+- [x] **(O-2)** WhatsApp link is hidden when `primary_phone_whatsapp = false` (verified via `Customer::whatsappUrl()` returning null).
+- [x] **(O-2)** Customer index search by E.164 form (`+201012345678`) matches a customer whose `primary_phone` was typed as `01012345678`.
+- [x] **(O-2)** Order create snapshots the customer's `normalized_phone` to `orders.customer_phone_normalized`.
+- [x] **(O-2)** `DuplicateDetectionService` flags two orders that normalize to the same E.164 even when typed differently.
+- [x] **(O-2)** `php artisan customers:backfill-phones` is idempotent (re-runs produce "No customers to backfill") and supports `--country`, `--dry-run`, `--limit`.
+- [ ] **(O-2 → deferred)** Duplicate `normalized_phone` across customers is **blocked at the DB level** — deferred. The unique index is intentionally NOT added in O-2 because pre-existing duplicates would otherwise block inserts. The dedupe service surfaces matches; the merge workflow (Phase 8) is the gate before locking uniqueness down.
 
 ---
 

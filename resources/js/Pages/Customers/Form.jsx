@@ -3,6 +3,19 @@ import LocationSelect from '@/Components/LocationSelect';
 import { useState } from 'react';
 
 /**
+ * O-2: supported country dial codes mirror
+ * `App\Services\PhoneNormalizationService::COUNTRY_RULES`. Adding a
+ * country requires updating BOTH this list AND the PHP constants —
+ * promoting to a Backend-provided prop is a future enhancement.
+ */
+const COUNTRY_CODES = [
+    { code: '+20', label: '🇪🇬 +20 Egypt' },
+    { code: '+966', label: '🇸🇦 +966 Saudi Arabia' },
+    { code: '+971', label: '🇦🇪 +971 UAE' },
+    { code: '+964', label: '🇮🇶 +964 Iraq' },
+];
+
+/**
  * Shared form for create + edit. The parent page wires `useForm` and
  * passes `data`, `setData`, `errors`, and the location tree (Phase 2).
  * Tags are managed locally here because they're an array string field.
@@ -55,22 +68,76 @@ export default function CustomerForm({ data, setData, errors, initialTags = [], 
                 </select>
             </FormField>
 
-            <FormField
-                label="Primary phone"
-                name="primary_phone"
-                value={data.primary_phone}
-                onChange={(v) => setData('primary_phone', v)}
-                error={errors.primary_phone}
-                required
-            />
+            {/* O-2: Primary phone with country picker. The operator
+                picks a country code; the existing `primary_phone` input
+                stays as the local-number entry. The backend computes
+                `normalized_phone` from the pair. */}
+            <FormField label="Primary phone" name="primary_phone" error={errors.primary_phone} required>
+                <div className="mt-1 flex gap-2">
+                    <select
+                        value={data.country_code ?? '+20'}
+                        onChange={(e) => setData('country_code', e.target.value)}
+                        className="rounded-md border-slate-300 text-sm"
+                        aria-label="Primary phone country code"
+                    >
+                        {COUNTRY_CODES.map((c) => (
+                            <option key={c.code} value={c.code}>{c.label}</option>
+                        ))}
+                    </select>
+                    <input
+                        id="primary_phone"
+                        type="tel"
+                        value={data.primary_phone ?? ''}
+                        onChange={(e) => setData('primary_phone', e.target.value)}
+                        placeholder="e.g. 01012345678"
+                        className="block w-full rounded-md border-slate-300 text-sm"
+                    />
+                </div>
+                {errors.primary_phone && <p className="mt-1 text-xs text-red-600">{errors.primary_phone}</p>}
+                {data.normalized_phone && (
+                    <p className="mt-1 text-[11px] text-slate-400">Saved as <span className="font-mono">{data.normalized_phone}</span></p>
+                )}
+            </FormField>
 
-            <FormField
-                label="Secondary phone"
-                name="secondary_phone"
-                value={data.secondary_phone}
-                onChange={(v) => setData('secondary_phone', v)}
-                error={errors.secondary_phone}
-            />
+            <FormField label="Secondary phone" name="secondary_phone" error={errors.secondary_phone}>
+                <div className="mt-1 flex gap-2">
+                    <select
+                        value={data.secondary_country_code ?? '+20'}
+                        onChange={(e) => setData('secondary_country_code', e.target.value)}
+                        className="rounded-md border-slate-300 text-sm"
+                        aria-label="Secondary phone country code"
+                    >
+                        {COUNTRY_CODES.map((c) => (
+                            <option key={c.code} value={c.code}>{c.label}</option>
+                        ))}
+                    </select>
+                    <input
+                        id="secondary_phone"
+                        type="tel"
+                        value={data.secondary_phone ?? ''}
+                        onChange={(e) => setData('secondary_phone', e.target.value)}
+                        placeholder="Optional"
+                        className="block w-full rounded-md border-slate-300 text-sm"
+                    />
+                </div>
+                {errors.secondary_phone && <p className="mt-1 text-xs text-red-600">{errors.secondary_phone}</p>}
+            </FormField>
+
+            {/* O-2: explicit WhatsApp opt-in (defaults to true). Phase 5.8
+                shipped the column; we surface the toggle here for parity
+                with Order Create. */}
+            <FormField label="WhatsApp" name="primary_phone_whatsapp" error={errors.primary_phone_whatsapp}>
+                <label className="mt-2 flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                        type="checkbox"
+                        checked={data.primary_phone_whatsapp !== false}
+                        onChange={(e) => setData('primary_phone_whatsapp', e.target.checked)}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span aria-hidden="true" className="text-base">🟢</span>
+                    <span>Primary phone reachable on WhatsApp</span>
+                </label>
+            </FormField>
 
             <FormField
                 label="Email"

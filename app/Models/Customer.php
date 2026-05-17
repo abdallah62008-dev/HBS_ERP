@@ -14,6 +14,10 @@ class Customer extends Model
 
     protected $fillable = [
         'name', 'primary_phone', 'secondary_phone', 'primary_phone_whatsapp', 'email',
+        // O-2: phone normalization triple. The legacy `primary_phone` +
+        // `secondary_phone` columns stay as display/back-compat fields.
+        'country_code', 'local_phone', 'normalized_phone',
+        'secondary_country_code', 'secondary_local_phone', 'secondary_normalized_phone',
         'city', 'governorate', 'country', 'default_address',
         'risk_score', 'risk_level', 'customer_type', 'notes',
         'created_by', 'updated_by', 'deleted_by',
@@ -23,6 +27,18 @@ class Customer extends Model
         'risk_score' => 'integer',
         'primary_phone_whatsapp' => 'boolean',
     ];
+
+    /**
+     * WhatsApp click-to-chat URL based on the normalized primary phone.
+     * Returns null when no normalized number is available or when the
+     * customer has explicitly opted out via `primary_phone_whatsapp`.
+     */
+    public function whatsappUrl(): ?string
+    {
+        if (! $this->primary_phone_whatsapp) return null;
+        $waNumber = \App\Services\PhoneNormalizationService::toWhatsappFormat($this->normalized_phone);
+        return $waNumber ? "https://wa.me/{$waNumber}" : null;
+    }
 
     /* Relationships */
 

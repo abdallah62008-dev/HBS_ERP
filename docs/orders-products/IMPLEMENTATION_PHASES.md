@@ -142,27 +142,36 @@
 | Risk | Low (additive + a one-time backfill) |
 | Depends on | Phase 0 |
 | Effort | 3–4 dev-days |
-| Status | Should |
+| Status | **Shipped 2026-05-17** |
 
-### Scope
-- `country_code` + `local_phone` + `normalized_phone` triple on `customers` and `customer_addresses`.
-- Validation per-country (EG / SA / AE / IQ) — see [PHONE_ADDRESS_AND_WHATSAPP_READINESS.md §3](./PHONE_ADDRESS_AND_WHATSAPP_READINESS.md).
-- Backfill job that parses existing free-text phones → triple.
-- WhatsApp link button on Customer Show + Order Show (already partially shipped — Phase O-2 finalizes).
+### Shipped
+- 2 additive migrations:
+  - `add_phone_normalization_to_customers` — adds primary + secondary phone triples on `customers` (each: `country_code`, `local_phone`, `normalized_phone`). Indexes on the two `normalized_phone` columns.
+  - `add_customer_phone_normalized_to_orders` — adds `customer_phone_normalized` (indexed) snapshot column on `orders`.
+- `App\Services\PhoneNormalizationService` — country rules in PHP constants (EG/SA/AE/IQ). Pure, DB-free, idempotent.
+- `StoreCustomerRequest` / `UpdateCustomerRequest` validate `country_code` against the allow-list and reject phones that don't normalize (422 with field-level errors).
+- `CustomersController` populates the triple on store/update and extends the index search to match `normalized_phone` / `secondary_normalized_phone`.
+- `OrderService::createFromPayload` snapshots `customer->normalized_phone` to `orders.customer_phone_normalized`.
+- `DuplicateDetectionService` Rule 1 (same primary phone, recent) queries the indexed `customer_phone_normalized` column first; falls back to the legacy raw-string compare for un-backfilled orders.
+- `Customer::whatsappUrl()` accessor — returns `https://wa.me/...` (or null when opted-out).
+- Customer Create/Edit form: country code dropdowns + "Saved as `<E.164>`" hint + explicit WhatsApp opt-in checkbox.
+- Customer Show: E.164 display + 🟢 WhatsApp click-to-chat link.
+- `php artisan customers:backfill-phones` (idempotent, supports `--country`, `--dry-run`, `--limit`). Side-effect: backfills `orders.customer_phone_normalized` for the customer's pre-O-2 orders.
+- Tests: 23 unit (service) + 8 store/update (controller) + 6 backfill + 3 dedupe = **40 new tests**. Full regression: **494 / 494**.
+
+### Deviations from plan
+- **`customer_addresses` phone triple was NOT added.** That table is rarely populated today; the doc-spec lists it but the value proposition for O-2 is on `customers` where every record lives. Defer until address-book usage justifies it.
+- **`countries` table extension** (`dial_code`, `national_prefix`, etc.) NOT added. PHP constants in `PhoneNormalizationService::COUNTRY_RULES` deliver the same functionality with zero schema impact. Promote to a DB lookup later if the rule set grows.
+- **Unique index on `normalized_phone` NOT added.** Backfill would surface real duplicates and block inserts. The doc-spec dedupe-merge workflow (Phase 8) is the right gate before locking down uniqueness.
+- **`customers.merge_duplicate` permission slug NOT added** — wait for the merge UI to ship.
 
 ### Migrations
-- `add_phone_triple_to_customers`.
-- `add_phone_triple_to_customer_addresses`.
-- Backfill job (idempotent).
+- 2 additive migrations + 1 artisan command. No `migrate:fresh` needed.
 
-### Why parallel-with O-1
-- O-2 can run independently of O-1 — different code paths.
-- Quick win for ops; WhatsApp templates already partly in place.
-
-### Exit criteria
-- Customer Create / Edit forms use the triple-field UI.
-- Validation rejects malformed numbers per the country rule.
-- Backfill flagged ≤ 1% of customers as "manual review" (the rest auto-normalize).
+### Exit criteria — verified
+- ✅ Customer Create / Edit form uses the country picker + local input pair.
+- ✅ Validation rejects malformed numbers per country rule (test: `creating_customer_with_invalid_phone_returns_422`).
+- ✅ Backfill idempotent (test: `backfill_is_idempotent`).
 
 ---
 

@@ -65,7 +65,26 @@ export default function CustomerShow({ customer, risk_breakdown }) {
                     </div>
 
                     <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-                        <Field label="Primary phone" value={customer.primary_phone} />
+                        <div>
+                            <Field label="Primary phone" value={customer.primary_phone} />
+                            {/* O-2: display the normalized E.164 form + a
+                                WhatsApp click-to-chat link when reachable. */}
+                            {customer.normalized_phone && (
+                                <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-500">
+                                    <span className="font-mono">{customer.normalized_phone}</span>
+                                    {customer.primary_phone_whatsapp && (
+                                        <a
+                                            href={`https://wa.me/${customer.normalized_phone.replace(/^\+/, '')}`}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-200"
+                                        >
+                                            <span aria-hidden="true">🟢</span> WhatsApp
+                                        </a>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                         <Field label="Secondary phone" value={customer.secondary_phone} />
                         <Field label="Email" value={customer.email} />
                         <Field label="Country" value={customer.country} />

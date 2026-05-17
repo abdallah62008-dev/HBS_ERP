@@ -9,6 +9,7 @@ use App\Models\Customer;
 use App\Models\CustomerTag;
 use App\Services\AuditLogService;
 use App\Services\CustomerRiskService;
+use App\Services\PhoneNormalizationService;
 use App\Services\SettingsService;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
@@ -29,6 +30,7 @@ class CustomersController extends Controller
 {
     public function __construct(
         private readonly CustomerRiskService $riskService,
+        private readonly PhoneNormalizationService $phoneService,
     ) {}
 
     public function index(Request $request): Response
@@ -37,11 +39,17 @@ class CustomersController extends Controller
 
         $customers = Customer::query()
             ->when($filters['q'] ?? null, function ($q, $term) {
-                $q->where(function ($w) use ($term) {
-                    $w->where('name', 'like', "%{$term}%")
-                        ->orWhere('primary_phone', 'like', "%{$term}%")
-                        ->orWhere('secondary_phone', 'like', "%{$term}%")
-                        ->orWhere('email', 'like', "%{$term}%");
+                // O-2: extend search to match the normalized triple too.
+                // A search for "+201012345678" now finds a customer whose
+                // operator typed "01012345678".
+                $like = "%{$term}%";
+                $q->where(function ($w) use ($like) {
+                    $w->where('name', 'like', $like)
+                        ->orWhere('primary_phone', 'like', $like)
+                        ->orWhere('secondary_phone', 'like', $like)
+                        ->orWhere('normalized_phone', 'like', $like)
+                        ->orWhere('secondary_normalized_phone', 'like', $like)
+                        ->orWhere('email', 'like', $like);
                 });
             })
             ->when($filters['risk_level'] ?? null, fn ($q, $v) => $q->where('risk_level', $v))
@@ -70,6 +78,11 @@ class CustomersController extends Controller
         $data = $request->validated();
         $tags = $data['tags'] ?? [];
         unset($data['tags']);
+
+        // O-2: populate the phone triple from the operator's raw input.
+        // The request validator already proved the values are
+        // normalizable; here we materialise the columns.
+        $data = $this->withNormalizedPhones($data);
 
         $customer = DB::transaction(function () use ($data, $tags) {
             $customer = Customer::create([
@@ -138,6 +151,11 @@ class CustomersController extends Controller
         $tags = $data['tags'] ?? null; // null => leave alone
         unset($data['tags']);
 
+        // O-2: recompute the phone triple from whatever was sent on the
+        // update. Unchanged phones don't need to re-flow through the
+        // service because the existing columns stay.
+        $data = $this->withNormalizedPhones($data);
+
         DB::transaction(function () use ($customer, $data, $tags) {
             $customer->fill([
                 ...$data,
@@ -161,6 +179,47 @@ class CustomersController extends Controller
         return redirect()
             ->route('customers.show', $customer)
             ->with('success', 'Customer updated.');
+    }
+
+    /**
+     * O-2: enrich a validated customer payload with the phone triple.
+     *
+     * The request validator has already proved the raw `primary_phone`
+     * (and `secondary_phone` when present) can be normalized. Here we
+     * persist the resulting `country_code` / `local_phone` /
+     * `normalized_phone` columns alongside the legacy phone strings.
+     *
+     * Idempotent: the original keys are preserved so callers can write
+     * the array straight to `Customer::create()` / `fill()`.
+     *
+     * @param  array<string,mixed>  $data
+     * @return array<string,mixed>
+     */
+    private function withNormalizedPhones(array $data): array
+    {
+        if (! empty($data['primary_phone'])) {
+            $res = $this->phoneService->normalize(
+                $data['primary_phone'],
+                $data['country_code'] ?? null,
+            );
+            if ($res['valid']) {
+                $data['country_code'] = $res['country_code'];
+                $data['local_phone'] = $res['local_phone'];
+                $data['normalized_phone'] = $res['normalized_phone'];
+            }
+        }
+        if (! empty($data['secondary_phone'])) {
+            $res = $this->phoneService->normalize(
+                $data['secondary_phone'],
+                $data['secondary_country_code'] ?? null,
+            );
+            if ($res['valid']) {
+                $data['secondary_country_code'] = $res['country_code'];
+                $data['secondary_local_phone'] = $res['local_phone'];
+                $data['secondary_normalized_phone'] = $res['normalized_phone'];
+            }
+        }
+        return $data;
     }
 
     public function destroy(Customer $customer): RedirectResponse
