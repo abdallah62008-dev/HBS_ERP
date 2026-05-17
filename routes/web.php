@@ -104,6 +104,18 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:customers.delete')->delete('/customers/{customer}/notes/{note}', [CustomersController::class, 'destroyNote'])
         ->name('customers.notes.destroy');
 
+    /* ─────────────── Customer address book (C-4B) ─────────────── */
+    // store / update / set-default reuse `customers.edit`; destroy
+    // reuses `customers.delete`. Zero new permission slugs.
+    Route::middleware('permission:customers.edit')->post('/customers/{customer}/addresses', [CustomersController::class, 'storeAddress'])
+        ->name('customers.addresses.store');
+    Route::middleware('permission:customers.edit')->put('/customers/{customer}/addresses/{address}', [CustomersController::class, 'updateAddress'])
+        ->name('customers.addresses.update');
+    Route::middleware('permission:customers.edit')->patch('/customers/{customer}/addresses/{address}/default', [CustomersController::class, 'setDefaultAddress'])
+        ->name('customers.addresses.default');
+    Route::middleware('permission:customers.delete')->delete('/customers/{customer}/addresses/{address}', [CustomersController::class, 'destroyAddress'])
+        ->name('customers.addresses.destroy');
+
     /* ─────────────── Categories (Phase 2) ─────────────── */
     Route::middleware('permission:products.view')->get('/categories', [CategoriesController::class, 'index'])
         ->name('categories.index');

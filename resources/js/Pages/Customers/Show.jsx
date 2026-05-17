@@ -3,6 +3,7 @@ import PageHeader from '@/Components/PageHeader';
 import StatusBadge from '@/Components/StatusBadge';
 import useCan from '@/Hooks/useCan';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
+import { useState } from 'react';
 
 function Field({ label, value }) {
     return (
@@ -110,6 +111,12 @@ export default function CustomerShow({
     // `customer.notes` free-text column.
     customer_notes = [],
     can_delete_customer = false,
+    // C-4B: address book — uses the existing `customer_addresses`
+    // table. Default-first, then newest by id. `can_manage_addresses`
+    // gates the add/edit/set-default actions; delete uses the existing
+    // `can_delete_customer` flag.
+    customer_addresses = [],
+    can_manage_addresses = false,
 }) {
     const can = useCan();
     const { props } = usePage();
@@ -136,6 +143,31 @@ export default function CustomerShow({
     const deleteNote = (noteId) => {
         if (!confirm('Delete this note? This cannot be undone.')) return;
         router.delete(route('customers.notes.destroy', [customer.id, noteId]), {
+            preserveScroll: true,
+        });
+    };
+
+    /* C-4B: customer address book inline form state. */
+    const addressForm = useForm({
+        address: '', city: '', governorate: '', country: customer.country ?? '', is_default: false,
+    });
+    const submitAddress = (e) => {
+        e.preventDefault();
+        if (!addressForm.data.address.trim() || addressForm.processing) return;
+        addressForm.post(route('customers.addresses.store', customer.id), {
+            preserveScroll: true,
+            onSuccess: () => addressForm.reset('address', 'city', 'governorate', 'is_default'),
+        });
+    };
+    const [editingAddressId, setEditingAddressId] = useState(null);
+    const setDefaultAddress = (addressId) => {
+        router.patch(route('customers.addresses.default', [customer.id, addressId]), {}, {
+            preserveScroll: true,
+        });
+    };
+    const deleteAddress = (addressId) => {
+        if (!confirm('Delete this address? This cannot be undone.')) return;
+        router.delete(route('customers.addresses.destroy', [customer.id, addressId]), {
             preserveScroll: true,
         });
     };
@@ -323,6 +355,132 @@ export default function CustomerShow({
                                         )}
                                     </div>
                                 </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            )}
+
+            {/* C-4B: Customer Address Book panel. Uses the existing
+                `customer_addresses` schema as-is. Default-first ordering.
+                Add / edit (inline) / set-default / delete with permission
+                gating. Order Create address selector is deferred until
+                O-3 districts ship. */}
+            {can('customers.view') && (
+                <div className="mb-4 rounded-lg border border-slate-200 bg-white">
+                    <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+                        <h2 className="text-sm font-semibold text-slate-700">Address book</h2>
+                        <span className="text-xs text-slate-400">
+                            {customer_addresses.length === 0
+                                ? 'No saved addresses'
+                                : `${customer_addresses.length} address${customer_addresses.length === 1 ? '' : 'es'}`}
+                        </span>
+                    </div>
+
+                    {can_manage_addresses && (
+                        <form onSubmit={submitAddress} className="border-b border-slate-100 px-5 py-3">
+                            <label htmlFor="customer-address-body" className="sr-only">Add an address</label>
+                            <textarea
+                                id="customer-address-body"
+                                rows={2}
+                                value={addressForm.data.address}
+                                onChange={(e) => addressForm.setData('address', e.target.value)}
+                                placeholder="Street + building + floor + apartment"
+                                maxLength={2000}
+                                className="block w-full rounded-md border-slate-300 text-sm"
+                                disabled={addressForm.processing}
+                            />
+                            {addressForm.errors.address && (
+                                <p className="mt-1 text-xs text-red-600">{addressForm.errors.address}</p>
+                            )}
+                            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                <input type="text" value={addressForm.data.city} onChange={(e) => addressForm.setData('city', e.target.value)} placeholder="City" className="rounded-md border-slate-300 text-xs" maxLength={255} />
+                                <input type="text" value={addressForm.data.governorate} onChange={(e) => addressForm.setData('governorate', e.target.value)} placeholder="Governorate / state" className="rounded-md border-slate-300 text-xs" maxLength={255} />
+                                <input type="text" value={addressForm.data.country} onChange={(e) => addressForm.setData('country', e.target.value)} placeholder="Country" className="rounded-md border-slate-300 text-xs" maxLength={255} />
+                            </div>
+                            <div className="mt-2 flex items-center justify-between gap-2">
+                                <label className="flex items-center gap-2 text-xs text-slate-600">
+                                    <input
+                                        type="checkbox"
+                                        checked={addressForm.data.is_default}
+                                        onChange={(e) => addressForm.setData('is_default', e.target.checked)}
+                                        className="rounded border-slate-300"
+                                    />
+                                    Set as default
+                                </label>
+                                <button
+                                    type="submit"
+                                    disabled={!addressForm.data.address.trim() || addressForm.processing}
+                                    className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+                                >
+                                    {addressForm.processing ? 'Saving…' : 'Add address'}
+                                </button>
+                            </div>
+                        </form>
+                    )}
+
+                    {customer_addresses.length === 0 ? (
+                        <div className="px-5 py-6 text-center text-xs text-slate-400">
+                            No addresses recorded yet.
+                        </div>
+                    ) : (
+                        <ul className="divide-y divide-slate-100">
+                            {customer_addresses.map((a) => (
+                                editingAddressId === a.id
+                                    ? <AddressEditRow key={a.id} address={a} customerId={customer.id} onDone={() => setEditingAddressId(null)} />
+                                    : (
+                                        <li key={a.id} className="px-5 py-3">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                                                        {a.is_default && (
+                                                            <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700">
+                                                                Default
+                                                            </span>
+                                                        )}
+                                                        {[a.city, a.governorate, a.country].filter(Boolean).length > 0 && (
+                                                            <span className="text-[11px] text-slate-500">
+                                                                {[a.city, a.governorate, a.country].filter(Boolean).join(' · ')}
+                                                            </span>
+                                                        )}
+                                                        {a.created_by?.name && (
+                                                            <span className="text-[11px] text-slate-400">added by {a.created_by.name}</span>
+                                                        )}
+                                                    </div>
+                                                    <div className="whitespace-pre-wrap text-sm text-slate-700">{a.address}</div>
+                                                </div>
+                                                <div className="flex shrink-0 flex-col items-end gap-1">
+                                                    {can_manage_addresses && !a.is_default && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setDefaultAddress(a.id)}
+                                                            className="text-[11px] text-indigo-600 hover:underline"
+                                                        >
+                                                            Set default
+                                                        </button>
+                                                    )}
+                                                    {can_manage_addresses && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setEditingAddressId(a.id)}
+                                                            className="text-[11px] text-slate-600 hover:underline"
+                                                        >
+                                                            Edit
+                                                        </button>
+                                                    )}
+                                                    {can_delete_customer && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => deleteAddress(a.id)}
+                                                            className="text-[11px] text-red-600 hover:underline"
+                                                        >
+                                                            Delete
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </li>
+                                    )
                             ))}
                         </ul>
                     )}
@@ -548,5 +706,66 @@ export default function CustomerShow({
                 )}
             </div>
         </AuthenticatedLayout>
+    );
+}
+
+/**
+ * C-4B: inline edit row for a customer address. Self-contained
+ * `useForm` so each editing row holds its own dirty state without
+ * polluting the parent component when several rows could be edited
+ * simultaneously (we don't allow that — `editingAddressId` is a single
+ * value — but keeping state local is cleaner).
+ */
+function AddressEditRow({ address, customerId, onDone }) {
+    const form = useForm({
+        address: address.address ?? '',
+        city: address.city ?? '',
+        governorate: address.governorate ?? '',
+        country: address.country ?? '',
+        is_default: !!address.is_default,
+    });
+    const submit = (e) => {
+        e.preventDefault();
+        if (!form.data.address.trim() || form.processing) return;
+        form.put(route('customers.addresses.update', [customerId, address.id]), {
+            preserveScroll: true,
+            onSuccess: () => onDone(),
+        });
+    };
+    return (
+        <li className="bg-slate-50 px-5 py-3">
+            <form onSubmit={submit} className="space-y-2">
+                <textarea
+                    rows={2}
+                    value={form.data.address}
+                    onChange={(e) => form.setData('address', e.target.value)}
+                    maxLength={2000}
+                    className="block w-full rounded-md border-slate-300 text-sm"
+                />
+                {form.errors.address && <p className="text-xs text-red-600">{form.errors.address}</p>}
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <input type="text" value={form.data.city ?? ''} onChange={(e) => form.setData('city', e.target.value)} placeholder="City" className="rounded-md border-slate-300 text-xs" maxLength={255} />
+                    <input type="text" value={form.data.governorate ?? ''} onChange={(e) => form.setData('governorate', e.target.value)} placeholder="Governorate / state" className="rounded-md border-slate-300 text-xs" maxLength={255} />
+                    <input type="text" value={form.data.country ?? ''} onChange={(e) => form.setData('country', e.target.value)} placeholder="Country" className="rounded-md border-slate-300 text-xs" maxLength={255} />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                    <label className="flex items-center gap-2 text-xs text-slate-600">
+                        <input
+                            type="checkbox"
+                            checked={form.data.is_default}
+                            onChange={(e) => form.setData('is_default', e.target.checked)}
+                            className="rounded border-slate-300"
+                        />
+                        Default address
+                    </label>
+                    <div className="flex gap-2">
+                        <button type="button" onClick={onDone} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs">Cancel</button>
+                        <button type="submit" disabled={form.processing} className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-60">
+                            {form.processing ? 'Saving…' : 'Save'}
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </li>
     );
 }

@@ -156,6 +156,28 @@ class CustomersController extends Controller
         // refunds. Capped at 30 events. No writes, no policy changes.
         $timeline = $this->customerTimeline($customer);
 
+        // C-4B: customer address book. Default first, then newest by id.
+        // Shaped specifically for the Show panel so the front-end doesn't
+        // have to massage the Eloquent serialisation.
+        $customerAddresses = $customer->addresses()
+            ->with(['createdBy:id,name', 'updatedBy:id,name'])
+            ->orderByDesc('is_default')
+            ->orderByDesc('id')
+            ->get(['id', 'customer_id', 'address', 'city', 'governorate', 'country', 'is_default', 'created_by', 'updated_by', 'created_at', 'updated_at'])
+            ->map(fn ($a) => [
+                'id' => (int) $a->id,
+                'address' => $a->address,
+                'city' => $a->city,
+                'governorate' => $a->governorate,
+                'country' => $a->country,
+                'is_default' => (bool) $a->is_default,
+                'created_at' => optional($a->created_at)->toIso8601String(),
+                'updated_at' => optional($a->updated_at)->toIso8601String(),
+                'created_by' => $a->createdBy ? ['id' => (int) $a->createdBy->id, 'name' => $a->createdBy->name] : null,
+                'updated_by' => $a->updatedBy ? ['id' => (int) $a->updatedBy->id, 'name' => $a->updatedBy->name] : null,
+            ])
+            ->all();
+
         // C-4A: structured customer notes (latest 50). Separate from
         // the legacy `customers.notes` text column.
         $customerNotes = $customer->customerNotes()
@@ -203,6 +225,13 @@ class CustomersController extends Controller
             // The customers.delete slug is the existing surface for any
             // destructive customer-side action.
             'can_delete_customer' => (bool) $user?->hasPermission('customers.delete'),
+
+            // C-4B: address book payload + manage gate. `customers.edit`
+            // covers add/update/set-default; delete is gated by the
+            // existing `can_delete_customer` flag the notes panel
+            // already uses.
+            'customer_addresses' => $customerAddresses,
+            'can_manage_addresses' => (bool) $user?->hasPermission('customers.edit'),
         ]);
     }
 
@@ -261,6 +290,192 @@ class CustomersController extends Controller
         return redirect()
             ->route('customers.show', $customer)
             ->with('success', 'Note removed.');
+    }
+
+    /* ──────────────────── C-4B: Customer Address Book ──────────────────── */
+
+    /**
+     * Validate a customer-address payload. Centralised so the create
+     * and update paths share the same rules and any future tightening
+     * (e.g. district FK once O-3 ships) lands in one place.
+     *
+     * @return array<string,mixed>
+     */
+    private function validateAddressPayload(Request $request): array
+    {
+        // city and country are required by the `customer_addresses` table
+        // schema (NOT NULL). governorate is nullable on both sides. The
+        // doc spec's "nullable" hint reflects the wishlist for after O-3
+        // ships the full address tree; for now we match the DB.
+        return $request->validate([
+            'address' => ['required', 'string', 'max:2000'],
+            'city' => ['required', 'string', 'max:255'],
+            'governorate' => ['nullable', 'string', 'max:255'],
+            'country' => ['required', 'string', 'max:255'],
+            'is_default' => ['nullable', 'boolean'],
+        ]);
+    }
+
+    /**
+     * Mirror a default address back to the legacy `customers.*` columns.
+     *
+     * Pre-C-4B, every read path (Order Create prefill, customer Show,
+     * reports) sourced the customer's address from `customers.default_address`
+     * + `city` / `governorate` / `country`. Keeping those columns in sync
+     * means we don't touch existing read paths and back-compat stays
+     * intact.
+     *
+     * Caller is responsible for running this inside the same transaction
+     * as the address mutation.
+     */
+    private function syncLegacyDefaultAddress(Customer $customer, \App\Models\CustomerAddress $address): void
+    {
+        $customer->fill([
+            'default_address' => $address->address,
+            'city' => $address->city ?? $customer->city,
+            'governorate' => $address->governorate ?? $customer->governorate,
+            'country' => $address->country ?? $customer->country,
+            'updated_by' => Auth::id(),
+        ])->save();
+    }
+
+    public function storeAddress(Request $request, Customer $customer): RedirectResponse
+    {
+        $data = $this->validateAddressPayload($request);
+        $explicitDefault = (bool) ($data['is_default'] ?? false);
+
+        DB::transaction(function () use ($customer, $data, $explicitDefault) {
+            // First address for this customer auto-becomes default
+            // even if the form didn't check the box. Saves an extra
+            // round-trip and avoids a customer with no default.
+            $isFirst = $customer->addresses()->count() === 0;
+            $shouldBeDefault = $explicitDefault || $isFirst;
+
+            if ($shouldBeDefault) {
+                $customer->addresses()->update(['is_default' => false]);
+            }
+
+            $address = $customer->addresses()->create([
+                'address' => $data['address'],
+                'city' => $data['city'],
+                'governorate' => $data['governorate'] ?? null,
+                'country' => $data['country'],
+                'is_default' => $shouldBeDefault,
+                'created_by' => Auth::id(),
+                'updated_by' => Auth::id(),
+            ]);
+
+            if ($shouldBeDefault) {
+                $this->syncLegacyDefaultAddress($customer, $address);
+            }
+
+            AuditLogService::logModelChange($address, 'created', 'customers');
+        });
+
+        return redirect()
+            ->route('customers.show', $customer)
+            ->with('success', 'Address added.');
+    }
+
+    public function updateAddress(Request $request, Customer $customer, \App\Models\CustomerAddress $address): RedirectResponse
+    {
+        if ((int) $address->customer_id !== (int) $customer->id) {
+            abort(404);
+        }
+        $data = $this->validateAddressPayload($request);
+        $newDefault = (bool) ($data['is_default'] ?? false);
+
+        DB::transaction(function () use ($customer, $address, $data, $newDefault) {
+            $address->fill([
+                'address' => $data['address'],
+                'city' => $data['city'],
+                'governorate' => $data['governorate'] ?? null,
+                'country' => $data['country'],
+                'is_default' => $newDefault,
+                'updated_by' => Auth::id(),
+            ]);
+
+            // If the operator promotes this row to default, clear the
+            // other addresses' default flag first so we never violate
+            // the invariant.
+            if ($newDefault) {
+                $customer->addresses()
+                    ->where('id', '!=', $address->id)
+                    ->update(['is_default' => false]);
+            }
+
+            $address->save();
+
+            if ($newDefault) {
+                $this->syncLegacyDefaultAddress($customer, $address);
+            }
+
+            AuditLogService::logModelChange($address, 'updated', 'customers');
+        });
+
+        return redirect()
+            ->route('customers.show', $customer)
+            ->with('success', 'Address updated.');
+    }
+
+    public function setDefaultAddress(Customer $customer, \App\Models\CustomerAddress $address): RedirectResponse
+    {
+        if ((int) $address->customer_id !== (int) $customer->id) {
+            abort(404);
+        }
+
+        DB::transaction(function () use ($customer, $address) {
+            $customer->addresses()->update(['is_default' => false]);
+            $address->fill(['is_default' => true, 'updated_by' => Auth::id()])->save();
+            $this->syncLegacyDefaultAddress($customer, $address);
+
+            AuditLogService::log(
+                action: 'default_set',
+                module: 'customers',
+                recordType: \App\Models\CustomerAddress::class,
+                recordId: $address->id,
+            );
+        });
+
+        return redirect()
+            ->route('customers.show', $customer)
+            ->with('success', 'Default address updated.');
+    }
+
+    public function destroyAddress(Customer $customer, \App\Models\CustomerAddress $address): RedirectResponse
+    {
+        if ((int) $address->customer_id !== (int) $customer->id) {
+            abort(404);
+        }
+
+        DB::transaction(function () use ($customer, $address) {
+            $wasDefault = (bool) $address->is_default;
+            $address->delete();
+
+            // If we just deleted the default, promote the most-recent
+            // remaining address to default. If none remain, the legacy
+            // `customers.default_address` stays as the last-known value
+            // (no autoclear — that would lose history for downstream
+            // reports). Operators can edit the customer to clear.
+            if ($wasDefault) {
+                $next = $customer->addresses()->orderByDesc('id')->first();
+                if ($next) {
+                    $next->fill(['is_default' => true, 'updated_by' => Auth::id()])->save();
+                    $this->syncLegacyDefaultAddress($customer, $next);
+                }
+            }
+
+            AuditLogService::log(
+                action: 'deleted',
+                module: 'customers',
+                recordType: \App\Models\CustomerAddress::class,
+                recordId: $address->id,
+            );
+        });
+
+        return redirect()
+            ->route('customers.show', $customer)
+            ->with('success', 'Address removed.');
     }
 
     /**
@@ -595,6 +810,38 @@ class CustomersController extends Controller
                     'meta' => ['refund_id' => $rf->id],
                 ];
             }
+        }
+
+        // 7. Customer addresses (C-4B). Only the *creation* event is
+        //    emitted — the table stores the current row only, so we
+        //    don't fabricate update/default-change history. The actor
+        //    is the create-time `created_by`; updated_by is for
+        //    audit-log lookups, not for timeline storytelling.
+        $addressesForTimeline = \App\Models\CustomerAddress::query()
+            ->where('customer_id', $customer->id)
+            ->with('createdBy:id,name')
+            ->latest('id')
+            ->limit($cap)
+            ->get(['id', 'customer_id', 'address', 'city', 'governorate', 'country', 'is_default', 'created_by', 'created_at']);
+
+        foreach ($addressesForTimeline as $a) {
+            $preview = trim((string) $a->address);
+            if (mb_strlen($preview) > 80) {
+                $preview = mb_substr($preview, 0, 80) . '…';
+            }
+            $cityLine = trim(implode(' · ', array_filter([$a->city, $a->governorate, $a->country])));
+            $subtitle = $cityLine !== '' ? "{$cityLine} — {$preview}" : $preview;
+            $events[] = [
+                'id' => "customer_address_added:{$a->id}",
+                'type' => 'customer_address_added',
+                'title' => $a->is_default ? 'Default address added' : 'Address added',
+                'subtitle' => $subtitle,
+                'timestamp' => optional($a->created_at)->toIso8601String(),
+                'actor_name' => optional($a->createdBy)->name,
+                'tone' => 'default',
+                'href' => null,
+                'meta' => ['is_default' => (bool) $a->is_default],
+            ];
         }
 
         // 6. Customer notes (C-4A). Indexed by (customer_id, created_at)

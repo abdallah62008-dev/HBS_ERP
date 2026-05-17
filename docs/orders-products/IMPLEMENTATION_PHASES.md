@@ -349,6 +349,58 @@
 
 ---
 
+## 4e. Phase C-4B — Customer Address Book UX
+
+| Field | Value |
+|---|---|
+| Code | C-4B |
+| Risk | Low (UX-only on existing schema) |
+| Depends on | C-4A (Customer Show extension surface) |
+| Effort | 0.5–1 dev-day |
+| Status | **Shipped 2026-05-17** |
+
+### Shipped
+- **Zero migrations.** Uses the existing `customer_addresses` table (`id, customer_id, address, city, governorate, country, is_default, created_by, updated_by, timestamps`) — schema unchanged.
+- `CustomerAddress` model gains `createdBy()` / `updatedBy()` relations for actor display in the Show panel + the timeline.
+- `CustomersController::show()` ships `customer_addresses` (default-first, then newest by id) + `can_manage_addresses` permission flag.
+- 4 new endpoints + routes:
+  - `POST /customers/{customer}/addresses` → `customers.addresses.store` (gated by `customers.edit`)
+  - `PUT /customers/{customer}/addresses/{address}` → `customers.addresses.update` (gated by `customers.edit`)
+  - `PATCH /customers/{customer}/addresses/{address}/default` → `customers.addresses.default` (gated by `customers.edit`)
+  - `DELETE /customers/{customer}/addresses/{address}` → `customers.addresses.destroy` (gated by `customers.delete`)
+- **Zero new permission slugs.**
+- Single-default invariant enforced inside a DB transaction. Setting a new default clears the prior default; first-address-becomes-default auto-promotion.
+- Cross-customer mutation (address belongs to a different customer than the URL) returns 404 — defence-in-depth on all 4 endpoints.
+- **Legacy sync:** `customers.default_address` / `city` / `governorate` / `country` are updated whenever the default address changes, so existing read paths (Order Create prefill, reports) keep working without code changes.
+- Delete-the-default behaviour: most-recent remaining address is automatically promoted to default. If none remain, the legacy `customers.default_address` value is intentionally preserved (no auto-clear) so downstream reports don't lose history.
+- Idempotent backfill: `php artisan customers:backfill-addresses` (with `--dry-run` and `--limit=<n>` flags). Copies each customer's `default_address` + city/governorate/country into a `customer_addresses` row with `is_default = true`, only when the customer has zero existing address rows.
+- C-3 timeline gains a 7th source: `customer_address_added` events. Title is "Default address added" or "Address added"; subtitle includes city/governorate/country + an 80-char body preview.
+- `Pages/Customers/Show.jsx`: new Address book panel beneath the Notes panel. Add-form (address textarea + city/governorate/country inputs + default checkbox + Save), per-row list with default badge, Set default / Edit (inline) / Delete actions. Inline `AddressEditRow` component keeps each editing row's state local.
+- Tests: 12 in `tests/Feature/Customers/CustomerAddressBookTest.php`. Full regression: **553 / 553**.
+
+### Deferred items (per C-4 review)
+- ⛔ **Address selector on Order Create** — defer until the combined C-4B/O-3 phase ships the district FK + full address tree. Order Create still uses `customers.default_address` today.
+- ⛔ **`district_id` FK, `street`, `landmark`, `label`/`type` columns** — Phase **O-3**.
+- ⛔ **Soft-delete on addresses** — hard delete only; audit log captures actions.
+- ⛔ **Update / default-change timeline events** — the current row-only schema cannot store update history without fabrication. C-4B emits the `customer_address_added` event only.
+- ⛔ **Duplicate merge workflow** — Phase **C-5**.
+- ⛔ **WhatsApp message templates / n8n automation** — Phase 7.
+
+### Migrations / permissions
+- **0 additive migrations. 0 new permission slugs.**
+
+### Exit criteria — verified
+- ✅ Customer Show renders the address book panel under the Notes panel.
+- ✅ Add / edit / set-default / delete actions are gated by existing customers.* slugs.
+- ✅ First address auto-defaults; `customers.default_address` stays in sync.
+- ✅ Single-default invariant holds across set-default and update paths.
+- ✅ Cross-customer mutation attempts return 404.
+- ✅ Backfill command is idempotent and supports `--dry-run` and `--limit`.
+- ✅ Address-added events surface in the C-3 timeline.
+- ✅ Legacy `customers.default_address` is preserved when the last address is deleted (no auto-clear).
+
+---
+
 ## 5. Phase P-2 — Pricing UX
 
 | Field | Value |

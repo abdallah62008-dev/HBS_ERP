@@ -242,10 +242,31 @@
 - [x] **(C-4A)** C-3 activity timeline picks up `customer_note_added` events with title "Internal note added" / "External note added" + body preview (≤ 80 chars).
 - [x] **(C-4A)** Audit log row written on note create and note delete (module = `customers`).
 - [x] **(C-4A)** Existing free-text `customer.notes` column still renders in the profile card — untouched by C-4A.
-- [ ] **(C-4A → deferred to C-4B)** Address book UX on Customer Show.
+- [x] **(C-4A → shipped in C-4B 2026-05-17)** Address book UX on Customer Show.
 - [ ] **(C-4A → deferred to combined C-4B/O-3)** Address selector on Order Create when arriving via `?customer_id=`.
 - [ ] **(C-4A → deferred)** Pinned notes / note categories / soft-delete on notes.
 - [ ] **(C-4A → deferred to C-5)** Duplicate customer merge workflow.
+
+---
+
+## 8e. Customer Address Book (C-4B)
+
+**Shipped 2026-05-17.** Auto-tested by `tests/Feature/Customers/CustomerAddressBookTest.php` (12 tests). Zero migrations.
+
+- [x] **(C-4B)** Address book panel renders on Customer Show under the Notes panel.
+- [x] **(C-4B)** Add-address form (address, city, governorate, country, default checkbox) gated by `customers.edit`.
+- [x] **(C-4B)** First saved address becomes the customer's default automatically.
+- [x] **(C-4B)** Setting an address as default clears the prior default — single-default invariant holds inside a DB transaction.
+- [x] **(C-4B)** Updating an address writes `updated_by`; promoting to default also syncs `customers.default_address` + city/governorate/country.
+- [x] **(C-4B)** Inline Edit row swaps the row in place; Cancel restores the read view.
+- [x] **(C-4B)** Delete is gated by `customers.delete`; deleting the default promotes the most-recent remaining address.
+- [x] **(C-4B)** Deleting the last address preserves the legacy `customers.default_address` value (no auto-clear).
+- [x] **(C-4B)** Cross-customer mutation (address belongs to a different customer than the URL) returns 404 on all 4 endpoints.
+- [x] **(C-4B)** `php artisan customers:backfill-addresses` is idempotent, supports `--dry-run` and `--limit=<n>`, copies `default_address` + city/governorate/country with `is_default = true` only when the customer has zero existing rows.
+- [x] **(C-4B)** Address-added events surface in the C-3 timeline as `customer_address_added`. Title is "Default address added" or "Address added"; subtitle includes city/governorate/country + body preview.
+- [ ] **(C-4B → deferred to combined C-4B/O-3 follow-up)** Address selector on Order Create. Order Create still reads `customers.default_address`.
+- [ ] **(C-4B → deferred to O-3)** `district_id` / `street` / `landmark` / `label` columns + full address tree UI.
+- [ ] **(C-4B → deferred)** Update / default-change events in the timeline. Current schema stores the row only, not its history.
 
 ---
 
