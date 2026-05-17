@@ -200,10 +200,31 @@
 - [x] **(C-2)** Customer with no orders renders all-zero stats; null ratios; no NaN / division-by-zero.
 - [x] **(C-2)** Duplicate-customer alert renders when another non-deleted customer shares `normalized_phone`. Excludes self. Capped at 5 rows. Each row links to the other customer.
 - [x] **(C-2)** Risk panel shows one-line operational recommendation under the score (Low / Medium / High). Order flow is NEVER blocked by the recommendation — it's pure guidance copy.
-- [ ] **(C-2 → deferred to C-3)** Customer activity timeline.
+- [x] **(C-2 → shipped in C-3 2026-05-17)** Customer activity timeline.
 - [ ] **(C-2 → deferred to C-4)** Customer notes + Address book UX.
 - [ ] **(C-2 → deferred to C-5)** Duplicate customer **merge** workflow (alert is shipped; the actual merge action is C-5).
 - [ ] **(C-2 → deferred to O-5)** `outstanding_balance` exactness — accurate splits require the multi-payment model from O-5.
+
+---
+
+## 8c. Customer activity timeline (C-3)
+
+**Shipped 2026-05-17.** Auto-tested by `tests/Feature/Customers/CustomerActivityTimelineTest.php` (12 tests).
+
+- [x] **(C-3)** Customer Show renders an "Activity timeline" panel below the recent-orders table.
+- [x] **(C-3)** Always emits a `customer_created` anchor event (even for customers with zero orders).
+- [x] **(C-3)** Emits `order_created` for each of the customer's recent orders (capped at 30) with a working link to `/orders/{id}`.
+- [x] **(C-3)** Emits `order_status_changed` from `order_status_history` filtered by the customer's recent order ids. Title reads "Order X changed from A to B".
+- [x] **(C-3)** Emits `return_created` events from `returns.customer_id` with a working link to `/returns/{id}`.
+- [x] **(C-3)** Emits `refund_created` events from `refunds.customer_id`, plus `refund_approved` / `refund_rejected` / `refund_paid` when those indexed timestamps are non-null.
+- [x] **(C-3)** Events sort newest-first; the timeline is sliced to 30 events.
+- [x] **(C-3)** Other customers' events DO NOT leak into the current customer's timeline.
+- [x] **(C-3)** Each event row shows: type chip · coloured dot · title · actor · subtitle · timestamp.
+- [x] **(C-3)** Empty state ("No activity yet.") renders cleanly when the timeline is empty.
+- [ ] **(C-3 → deferred)** Audit log events — broad IN-list against `audit_logs.record_id` has unclear scale. Revisit after a per-customer audit view spec.
+- [ ] **(C-3 → deferred)** Shipment events — order_status_changed covers the shipping lifecycle at the order level for now.
+- [ ] **(C-3 → deferred)** Collection events — duplicates order info pre-O-5.
+- [ ] **(C-3 → deferred to C-4)** Customer-note timeline events — depends on `customer_notes` table.
 
 ---
 

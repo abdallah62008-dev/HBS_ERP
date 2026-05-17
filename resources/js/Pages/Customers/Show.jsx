@@ -49,6 +49,46 @@ function fmtDate(iso) {
     return String(iso).split('T')[0];
 }
 
+/**
+ * C-3: timestamp formatter for the activity timeline. Shows date +
+ * 24h time without seconds. Falls back to the raw ISO string when
+ * the value is unparseable so we never render "Invalid Date".
+ */
+function fmtTimelineTimestamp(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * C-3: tone → Tailwind class mapping for the timeline event dot.
+ * Keeps the colour palette consistent with the stats cards.
+ */
+const TIMELINE_TONES = {
+    default: 'bg-slate-300',
+    slate: 'bg-slate-400',
+    emerald: 'bg-emerald-500',
+    amber: 'bg-amber-500',
+    red: 'bg-red-500',
+};
+
+/**
+ * C-3: type → icon glyph mapping. Lucide-ish glyphs available in the
+ * project's font; falls back to a neutral dot otherwise.
+ */
+const TIMELINE_TYPE_LABELS = {
+    customer_created: 'Profile',
+    order_created: 'Order',
+    order_status_changed: 'Status',
+    return_created: 'Return',
+    refund_created: 'Refund',
+    refund_approved: 'Refund',
+    refund_rejected: 'Refund',
+    refund_paid: 'Refund',
+};
+
 export default function CustomerShow({
     customer,
     risk_breakdown,
@@ -63,6 +103,8 @@ export default function CustomerShow({
     stats = null,
     duplicate_customers = [],
     risk_recommendation = null,
+    // C-3: read-only activity timeline (capped at 30 events).
+    timeline = [],
 }) {
     const can = useCan();
     const { props } = usePage();
@@ -331,6 +373,57 @@ export default function CustomerShow({
                             ))}
                         </tbody>
                     </table>
+                )}
+            </div>
+
+            {/* C-3: read-only customer activity timeline. Merges
+                customer_created + order_created + order_status_changed
+                + return_created + refund_(created|approved|rejected|paid)
+                events. Capped at 30 newest-first. */}
+            <div className="mt-6 rounded-lg border border-slate-200 bg-white">
+                <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+                    <h2 className="text-sm font-semibold text-slate-700">Activity timeline</h2>
+                    <span className="text-xs text-slate-400">
+                        {Array.isArray(timeline) && timeline.length > 0
+                            ? `${timeline.length} event${timeline.length === 1 ? '' : 's'}`
+                            : 'No activity yet'}
+                    </span>
+                </div>
+                {(!Array.isArray(timeline) || timeline.length === 0) ? (
+                    <div className="px-5 py-8 text-center text-sm text-slate-400">No activity yet.</div>
+                ) : (
+                    <ol className="divide-y divide-slate-100">
+                        {timeline.map((evt) => {
+                            const dotClass = TIMELINE_TONES[evt.tone] ?? TIMELINE_TONES.default;
+                            const typeLabel = TIMELINE_TYPE_LABELS[evt.type] ?? 'Event';
+                            const TitleEl = evt.href ? Link : 'span';
+                            const titleProps = evt.href ? { href: evt.href, className: 'font-medium text-slate-800 hover:text-indigo-600' } : { className: 'font-medium text-slate-800' };
+                            return (
+                                <li key={evt.id} className="flex items-start gap-3 px-5 py-3">
+                                    <div className="mt-1.5 flex h-5 w-5 shrink-0 items-center justify-center">
+                                        <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} aria-hidden="true" />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex flex-wrap items-baseline gap-2">
+                                            <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
+                                                {typeLabel}
+                                            </span>
+                                            <TitleEl {...titleProps}>{evt.title}</TitleEl>
+                                            {evt.actor_name && (
+                                                <span className="text-[11px] text-slate-400">· by {evt.actor_name}</span>
+                                            )}
+                                        </div>
+                                        {evt.subtitle && (
+                                            <div className="mt-0.5 text-xs text-slate-500">{evt.subtitle}</div>
+                                        )}
+                                    </div>
+                                    <div className="shrink-0 text-[11px] tabular-nums text-slate-400" title={evt.timestamp || ''}>
+                                        {fmtTimelineTimestamp(evt.timestamp)}
+                                    </div>
+                                </li>
+                            );
+                        })}
+                    </ol>
                 )}
             </div>
         </AuthenticatedLayout>

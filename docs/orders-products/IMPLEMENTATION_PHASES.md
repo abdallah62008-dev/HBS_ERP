@@ -249,12 +249,57 @@
 - **None.** C-2 ships zero migrations, zero new permission slugs, zero `.env` changes, zero package installs.
 
 ### Deferred items (per C-0 roadmap)
-- ⛔ Customer activity timeline — **C-3**.
+- ⛔ Customer activity timeline — **C-3 (shipped 2026-05-17)**.
 - ⛔ Customer notes (new table) — **C-4**.
 - ⛔ Address book UX — **C-4** (`customer_addresses` table exists; unused in app code).
 - ⛔ Duplicate merge workflow — **C-5**.
 - ⛔ WhatsApp message templates / n8n automation — **Phase 7**.
 - ⛔ Visual risk colour-bar — punted until ops asks; the text chip is enough for now.
+
+---
+
+## 4c. Phase C-3 — Customer Activity Timeline
+
+| Field | Value |
+|---|---|
+| Code | C-3 |
+| Risk | Low (read-only event merge from existing indexed tables) |
+| Depends on | C-2 (Customer Show extension surface) |
+| Effort | 1 dev-day |
+| Status | **Shipped 2026-05-17** |
+
+### Shipped
+- `CustomersController::show` ships a new `timeline` prop. Helper `customerTimeline()` merges 4 source queries (each capped at 30 rows) and slices the merged list to 30 events newest-first.
+- Sources included:
+  - `customers.created_at` → `customer_created`
+  - `orders WHERE customer_id = ?` (indexed) → `order_created`
+  - `order_status_history WHERE order_id IN (recent_order_ids)` → `order_status_changed`
+  - `returns WHERE customer_id = ?` (indexed) → `return_created`
+  - `refunds WHERE customer_id = ?` (indexed) → `refund_created` (+ `refund_approved` / `refund_rejected` / `refund_paid` when their respective indexed timestamps are non-null)
+- Event payload shape: `{ id, type, title, subtitle, timestamp, actor_name, tone, href, meta }`. Tone drives the colour of the timeline dot; href is server-rendered only for the safe routes (`orders.show`, `returns.show`).
+- `Pages/Customers/Show.jsx` renders an "Activity timeline" panel under the recent-orders table — vertical list with type chip + colour dot + title (linked when safe) + actor + subtitle + relative timestamp.
+- Tests: 12 in `tests/Feature/Customers/CustomerActivityTimelineTest.php`. Full regression: **532 / 532**.
+
+### Deferred items (per C-0 review)
+- ⛔ **`audit_logs` events** — `record_type + record_id` is indexed, but pulling events for all of a customer's related orders requires an unbounded IN-list which has unclear performance characteristics at scale. Revisit once a per-customer audit view is needed.
+- ⛔ **`shipments` events** — keeps initial timeline focused; order_status_changed already covers the shipping lifecycle at the order level.
+- ⛔ **`collections` events** — duplicates order info today (one-to-one with order). Re-evaluate after O-5 multi-payment.
+- ⛔ **WhatsApp events** — no source data today.
+- ⛔ **Refund show route link** in event href — refund show route permission scope wasn't fully verified for every role; defer until the Phase 5 finance permission audit completes.
+- ⛔ Customer notes timeline events — depends on C-4 schema.
+
+### Migrations / permissions
+- **None.** C-3 ships zero migrations and zero new permission slugs.
+
+### Exit criteria — verified
+- ✅ Timeline ships from Customer Show.
+- ✅ Always emits a `customer_created` anchor event.
+- ✅ Order, return, refund events appear when their data exists.
+- ✅ Sorts newest-first.
+- ✅ Capped at 30 events.
+- ✅ Other customers' events do not leak.
+- ✅ Order events link to Order Show.
+- ✅ Each source query is bounded (≤ 30 rows) and uses an indexed column.
 
 ---
 

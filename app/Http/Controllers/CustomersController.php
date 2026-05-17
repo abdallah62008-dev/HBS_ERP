@@ -151,6 +151,11 @@ class CustomersController extends Controller
         $stats = $this->customerStats($customer);
         $duplicateCustomers = $this->duplicateCustomers($customer);
 
+        // C-3: read-only customer activity timeline. Merges events from
+        // customer.created_at + orders + order_status_history + returns +
+        // refunds. Capped at 30 events. No writes, no policy changes.
+        $timeline = $this->customerTimeline($customer);
+
         return Inertia::render('Customers/Show', [
             'customer' => $customer,
             'risk_breakdown' => $riskBreakdown,
@@ -167,6 +172,9 @@ class CustomersController extends Controller
             'stats' => $stats,
             'duplicate_customers' => $duplicateCustomers,
             'risk_recommendation' => $this->riskRecommendation($riskBreakdown['level'] ?? 'Low'),
+
+            // C-3: read-only activity timeline.
+            'timeline' => $timeline,
         ]);
     }
 
@@ -310,6 +318,208 @@ class CustomersController extends Controller
             'Medium' => 'Review recent history before shipping.',
             default => 'Normal order flow.',
         };
+    }
+
+    /**
+     * C-3: build the read-only customer activity timeline.
+     *
+     * Sources merged in this phase (all use indexed columns):
+     *   - customer.created_at                  → customer_created
+     *   - orders WHERE customer_id = ?         → order_created
+     *   - order_status_history (recent orders) → order_status_changed
+     *   - returns WHERE customer_id = ?        → return_created
+     *   - refunds WHERE customer_id = ?        → refund_created
+     *                                          + refund_approved (when approved_at set)
+     *                                          + refund_rejected (when rejected_at set)
+     *                                          + refund_paid     (when paid_at set)
+     *
+     * Each source is independently capped before merge so a customer with
+     * 10 000 orders doesn't pull 30 000 history rows into PHP. After
+     * merging we sort DESC by timestamp and slice to 30. Operator clicks
+     * through to the related record for detail.
+     *
+     * Audit-log and shipment events are deferred — see
+     * docs/orders-products/IMPLEMENTATION_PHASES.md C-3 section.
+     *
+     * @return array<int, array{
+     *   id:string, type:string, title:string, subtitle:?string,
+     *   timestamp:string, actor_name:?string, tone:string,
+     *   href:?string, meta:?array
+     * }>
+     */
+    private function customerTimeline(\App\Models\Customer $customer): array
+    {
+        $events = [];
+        $cap = 30; // per-source cap; final list is also sliced to 30.
+
+        // 1. Customer profile created — anchor event so a brand-new
+        //    customer with zero orders still has a timeline.
+        if ($customer->created_at) {
+            $events[] = [
+                'id' => "customer_created:{$customer->id}",
+                'type' => 'customer_created',
+                'title' => 'Customer profile created',
+                'subtitle' => $customer->name,
+                'timestamp' => $customer->created_at->toIso8601String(),
+                'actor_name' => optional($customer->createdBy)->name,
+                'tone' => 'slate',
+                'href' => null,
+                'meta' => null,
+            ];
+        }
+
+        // 2. Orders created. Limit upfront so order_status_history can
+        //    safely use the same id list without an unbounded IN clause.
+        $recentOrders = \App\Models\Order::query()
+            ->where('customer_id', $customer->id)
+            ->latest('id')
+            ->limit($cap)
+            ->get(['id', 'order_number', 'status', 'total_amount', 'currency_code', 'created_at', 'created_by']);
+
+        $orderIds = $recentOrders->pluck('id')->all();
+
+        foreach ($recentOrders as $o) {
+            $events[] = [
+                'id' => "order_created:{$o->id}",
+                'type' => 'order_created',
+                'title' => "Order {$o->order_number} created",
+                'subtitle' => $o->currency_code . ' ' . number_format((float) $o->total_amount, 2),
+                'timestamp' => optional($o->created_at)->toIso8601String(),
+                'actor_name' => null,
+                'tone' => 'default',
+                'href' => route('orders.show', $o->id),
+                'meta' => ['order_status' => $o->status],
+            ];
+        }
+
+        // 3. Order status changes — bounded by the recent order id list.
+        if (! empty($orderIds)) {
+            $history = \App\Models\OrderStatusHistory::query()
+                ->whereIn('order_id', $orderIds)
+                ->latest('id')
+                ->limit($cap)
+                ->get(['id', 'order_id', 'old_status', 'new_status', 'changed_by', 'created_at']);
+
+            $orderNumberById = $recentOrders->pluck('order_number', 'id');
+
+            foreach ($history as $h) {
+                $orderNumber = $orderNumberById[$h->order_id] ?? "#{$h->order_id}";
+                $tone = match ($h->new_status) {
+                    'Delivered' => 'emerald',
+                    'Returned', 'Cancelled' => 'amber',
+                    'Need Review' => 'red',
+                    default => 'default',
+                };
+                $events[] = [
+                    'id' => "order_status:{$h->id}",
+                    'type' => 'order_status_changed',
+                    'title' => "Order {$orderNumber} changed from {$h->old_status} to {$h->new_status}",
+                    'subtitle' => null,
+                    'timestamp' => optional($h->created_at)->toIso8601String(),
+                    'actor_name' => optional($h->changedBy)->name,
+                    'tone' => $tone,
+                    'href' => route('orders.show', $h->order_id),
+                    'meta' => ['from' => $h->old_status, 'to' => $h->new_status],
+                ];
+            }
+        }
+
+        // 4. Returns — directly indexed on customer_id.
+        $returns = \App\Models\OrderReturn::query()
+            ->where('customer_id', $customer->id)
+            ->latest('id')
+            ->limit($cap)
+            ->get(['id', 'order_id', 'return_status', 'created_at', 'created_by']);
+
+        foreach ($returns as $r) {
+            // Use the model's display reference accessor if available.
+            $rmaRef = method_exists($r, 'getDisplayReferenceAttribute')
+                ? $r->display_reference
+                : ("RET-" . str_pad((string) $r->id, 6, '0', STR_PAD_LEFT));
+            $events[] = [
+                'id' => "return_created:{$r->id}",
+                'type' => 'return_created',
+                'title' => "Return {$rmaRef} opened",
+                'subtitle' => "Status: {$r->return_status}",
+                'timestamp' => optional($r->created_at)->toIso8601String(),
+                'actor_name' => null,
+                'tone' => 'amber',
+                'href' => route('returns.show', $r->id),
+                'meta' => ['return_status' => $r->return_status, 'order_id' => $r->order_id],
+            ];
+        }
+
+        // 5. Refunds — indexed on customer_id. Each refund row can yield
+        //    up to 4 events: created, approved, rejected, paid. The
+        //    refund index has individual timestamp indexes so this stays
+        //    cheap.
+        $refunds = \App\Models\Refund::query()
+            ->where('customer_id', $customer->id)
+            ->latest('id')
+            ->limit($cap)
+            ->get(['id', 'order_id', 'amount', 'status', 'created_at', 'approved_at', 'rejected_at', 'paid_at']);
+
+        foreach ($refunds as $rf) {
+            $events[] = [
+                'id' => "refund_created:{$rf->id}",
+                'type' => 'refund_created',
+                'title' => "Refund request #{$rf->id} created",
+                'subtitle' => 'Amount: ' . number_format((float) $rf->amount, 2),
+                'timestamp' => optional($rf->created_at)->toIso8601String(),
+                'actor_name' => null,
+                'tone' => 'default',
+                'href' => null, // Refund show route may not be permission-safe for every user; defer the link.
+                'meta' => ['refund_status' => $rf->status, 'order_id' => $rf->order_id],
+            ];
+            if ($rf->approved_at) {
+                $events[] = [
+                    'id' => "refund_approved:{$rf->id}",
+                    'type' => 'refund_approved',
+                    'title' => "Refund #{$rf->id} approved",
+                    'subtitle' => null,
+                    'timestamp' => $rf->approved_at->toIso8601String(),
+                    'actor_name' => null,
+                    'tone' => 'emerald',
+                    'href' => null,
+                    'meta' => ['refund_id' => $rf->id],
+                ];
+            }
+            if ($rf->rejected_at) {
+                $events[] = [
+                    'id' => "refund_rejected:{$rf->id}",
+                    'type' => 'refund_rejected',
+                    'title' => "Refund #{$rf->id} rejected",
+                    'subtitle' => null,
+                    'timestamp' => $rf->rejected_at->toIso8601String(),
+                    'actor_name' => null,
+                    'tone' => 'amber',
+                    'href' => null,
+                    'meta' => ['refund_id' => $rf->id],
+                ];
+            }
+            if ($rf->paid_at) {
+                $events[] = [
+                    'id' => "refund_paid:{$rf->id}",
+                    'type' => 'refund_paid',
+                    'title' => "Refund #{$rf->id} paid",
+                    'subtitle' => null,
+                    'timestamp' => $rf->paid_at->toIso8601String(),
+                    'actor_name' => null,
+                    'tone' => 'emerald',
+                    'href' => null,
+                    'meta' => ['refund_id' => $rf->id],
+                ];
+            }
+        }
+
+        // Sort merged events by timestamp DESC. Events with null
+        // timestamps (shouldn't happen — every source has indexed
+        // timestamps) sort last.
+        usort($events, function ($a, $b) {
+            return strcmp((string) ($b['timestamp'] ?? ''), (string) ($a['timestamp'] ?? ''));
+        });
+
+        return array_slice($events, 0, $cap);
     }
 
     public function edit(Customer $customer): Response
