@@ -44,9 +44,17 @@ export default function ProductShow({ product }) {
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <div className="lg:col-span-2 rounded-lg border border-slate-200 bg-white p-5">
-                    <div className="mb-3 flex items-center gap-2">
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
                         <StatusBadge value={product.status} />
                         {product.category && <span className="text-xs text-slate-500">{product.category.name}</span>}
+                        {product.brand && (
+                            <span
+                                className={`rounded-full px-2 py-0.5 text-xs ${product.brand.is_active ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500 line-through'}`}
+                                title={product.brand.is_active ? 'Brand' : 'Brand (inactive)'}
+                            >
+                                {product.brand.name}
+                            </span>
+                        )}
                         {product.tax_enabled && (
                             <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
                                 Tax {product.tax_rate}%
@@ -102,6 +110,58 @@ export default function ProductShow({ product }) {
                     </table>
                 )}
             </div>
+
+            {/* Channel SKUs (P-1) — marketplace mappings per variant. */}
+            {(() => {
+                // Flatten all channel SKUs across variants. Group visually
+                // by variant for operator scannability.
+                const variantsWithSkus = (product.variants ?? [])
+                    .map((v) => ({ variant: v, rows: (v.channel_skus ?? []) }))
+                    .filter(({ rows }) => rows.length > 0);
+
+                if (variantsWithSkus.length === 0) return null;
+
+                return (
+                    <div className="mt-6 rounded-lg border border-slate-200 bg-white">
+                        <div className="border-b border-slate-200 px-5 py-3">
+                            <h2 className="text-sm font-semibold text-slate-700">Channel SKUs</h2>
+                            <p className="text-[11px] text-slate-400">External marketplace SKUs mapped to each variant. Inactive rows are dimmed.</p>
+                        </div>
+                        <table className="min-w-full divide-y divide-slate-200 text-sm">
+                            <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                                <tr>
+                                    <th className="px-5 py-2">Variant</th>
+                                    <th className="px-5 py-2">Channel</th>
+                                    <th className="px-5 py-2">External SKU</th>
+                                    <th className="px-5 py-2">Ext. barcode</th>
+                                    <th className="px-5 py-2">URL</th>
+                                    <th className="px-5 py-2">Active</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {variantsWithSkus.flatMap(({ variant, rows }) =>
+                                    rows.map((row) => (
+                                        <tr key={row.id} className={row.is_active ? '' : 'opacity-50'}>
+                                            <td className="px-5 py-2">{variant.variant_name} <span className="ml-1 font-mono text-[11px] text-slate-400">({variant.sku})</span></td>
+                                            <td className="px-5 py-2">{row.channel}</td>
+                                            <td className="px-5 py-2 font-mono text-xs">{row.external_sku}</td>
+                                            <td className="px-5 py-2 font-mono text-xs text-slate-500">{row.external_barcode || '—'}</td>
+                                            <td className="px-5 py-2 max-w-[200px] truncate">
+                                                {row.external_url
+                                                    ? <a href={row.external_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">link</a>
+                                                    : <span className="text-slate-400">—</span>}
+                                            </td>
+                                            <td className="px-5 py-2 text-xs">
+                                                {row.is_active ? <span className="text-emerald-700">Yes</span> : <span className="text-slate-500">No</span>}
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            })()}
 
             {/* Price history */}
             <div className="mt-6 rounded-lg border border-slate-200 bg-white">

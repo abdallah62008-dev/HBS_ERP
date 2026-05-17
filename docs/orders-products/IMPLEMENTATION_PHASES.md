@@ -47,7 +47,24 @@
 | Risk | Low (additive only) |
 | Depends on | Phase 0 |
 | Effort | 3–5 dev-days |
-| Status | Should — first coding phase |
+| Status | **Shipped 2026-05-17** |
+
+### Shipped
+- 3 additive migrations: `brands`, `products.brand_id` FK, `product_channel_skus`.
+- 2 models: `Brand`, `ProductChannelSku`. Relationships wired into `Product` + `ProductVariant`.
+- Brand admin CRUD at `/brands` + sidebar entry under Inventory & Products.
+- Product Create/Edit: Brand dropdown + Quick-Brand modal; Channel SKU repeater (variant × channel × external SKU/barcode/URL/notes/active).
+- Product Show: Brand badge + Channel SKUs table.
+- Product Index: Brand filter + Brand column.
+- Product index search extended to variant SKU/barcode + channel external SKU/barcode (EXISTS sub-queries).
+- Tests: `tests/Feature/Products/ProductBrandAndChannelSkuTest.php` (22 tests).
+- Full regression: 438 tests pass.
+
+### Deviations from §2 plan
+- **`products.edit_brand` / `products.edit_channel_sku` slugs not added.** P-1 uses existing `products.create`/`products.edit` per the brief's "avoid adding new permission slugs unless already necessary." Add slugs in a follow-up phase when separation-of-duties demand surfaces.
+- **Order Create product search (`/orders/products/search`) NOT extended.** Hot-path; the existing (name/sku/barcode) contract stays. The extension is queued for a later phase.
+- **Channel ENUM stored as VARCHAR(32), not a DB enum.** SQLite portability for tests + future marketplace additions become code-only changes. App-level validation enforces the allowed set via `ProductChannelSku::CHANNELS`.
+- **`external_barcode` added** to `product_channel_skus` beyond what the design doc specified. Some marketplaces print their own barcode; ops needs both fields for reconciliation.
 
 ### Scope
 - `brands` table + `products.brand_id` FK + Brand admin CRUD page.

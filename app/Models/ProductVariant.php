@@ -30,4 +30,13 @@ class ProductVariant extends Model
     {
         return $this->hasMany(ProductPriceHistory::class);
     }
+
+    /**
+     * Channel SKUs (marketplace mappings) attached to this variant.
+     * Phase P-1. See {@see ProductChannelSku}.
+     */
+    public function channelSkus(): HasMany
+    {
+        return $this->hasMany(ProductChannelSku::class);
+    }
 }

@@ -4,12 +4,13 @@ import ProductForm from './Form';
 import useUnsavedChangesWarning from '@/Hooks/useUnsavedChangesWarning';
 import { Head, Link, useForm } from '@inertiajs/react';
 
-export default function ProductCreate({ categories, marketer_tiers = [] }) {
+export default function ProductCreate({ categories, brands = [], channels = [], marketer_tiers = [] }) {
     const { data, setData, post, processing, errors, isDirty } = useForm({
         name: '',
         sku: '',
         barcode: '',
         category_id: '',
+        brand_id: '',
         description: '',
         cost_price: '0',
         selling_price: '0',
@@ -20,6 +21,9 @@ export default function ProductCreate({ categories, marketer_tiers = [] }) {
         reorder_level: '0',
         status: 'Active',
         tier_prices: {},
+        // Channel SKUs section is hidden on Create (no variants yet),
+        // but ship an empty array so the payload is consistent.
+        channel_skus: [],
     });
 
     useUnsavedChangesWarning(isDirty);
@@ -35,7 +39,16 @@ export default function ProductCreate({ categories, marketer_tiers = [] }) {
             <PageHeader title="New product" />
 
             <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5">
-                <ProductForm data={data} setData={setData} errors={errors} categories={categories} marketerTiers={marketer_tiers} />
+                <ProductForm
+                    data={data}
+                    setData={setData}
+                    errors={errors}
+                    categories={categories}
+                    brands={brands}
+                    channels={channels}
+                    productVariants={[]}
+                    marketerTiers={marketer_tiers}
+                />
 
                 <div className="mt-6 flex items-center justify-end gap-2">
                     <Link href={route('products.index')} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">Cancel</Link>

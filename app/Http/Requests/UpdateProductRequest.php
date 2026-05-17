@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Models\ProductChannelSku;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -26,6 +27,8 @@ class UpdateProductRequest extends FormRequest
             ],
             'barcode' => ['nullable', 'string', 'max:64'],
             'category_id' => ['nullable', 'exists:categories,id'],
+            // P-1: brand is optional. Allowed on update to retag.
+            'brand_id' => ['nullable', 'integer', 'exists:brands,id'],
             'image_url' => ['nullable', 'string', 'max:1024'],
             'description' => ['nullable', 'string'],
 
@@ -51,6 +54,43 @@ class UpdateProductRequest extends FormRequest
             'tier_prices.*.vat_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'tier_prices.*.collection_cost' => ['nullable', 'numeric', 'min:0'],
             'tier_prices.*.return_cost' => ['nullable', 'numeric', 'min:0'],
+
+            // P-1: channel SKU repeater. Same shape as Store request.
+            // `channel_skus` field is optional on update — when absent
+            // the controller leaves existing rows untouched (used by
+            // older form payloads that never sent the section).
+            'channel_skus' => ['nullable', 'array'],
+            'channel_skus.*.id' => ['nullable', 'integer', 'exists:product_channel_skus,id'],
+            'channel_skus.*.product_variant_id' => ['required_with:channel_skus.*.channel', 'integer', 'exists:product_variants,id'],
+            'channel_skus.*.channel' => ['required_with:channel_skus.*.external_sku', 'string', Rule::in(ProductChannelSku::CHANNELS)],
+            'channel_skus.*.external_sku' => ['required_with:channel_skus.*.channel', 'string', 'max:128'],
+            'channel_skus.*.external_barcode' => ['nullable', 'string', 'max:128'],
+            'channel_skus.*.external_url' => ['nullable', 'string', 'max:1024'],
+            'channel_skus.*.is_active' => ['nullable', 'boolean'],
+            'channel_skus.*.notes' => ['nullable', 'string', 'max:1000'],
         ];
+    }
+
+    /**
+     * Catch in-form duplicates on `(variant_id, channel)` so the user
+     * sees a friendly 422 instead of the DB unique constraint failure.
+     */
+    public function withValidator(\Illuminate\Contracts\Validation\Validator $validator): void
+    {
+        $validator->after(function ($v) {
+            $rows = (array) $this->input('channel_skus', []);
+            $seen = [];
+            foreach ($rows as $i => $row) {
+                $variantId = $row['product_variant_id'] ?? null;
+                $channel = $row['channel'] ?? null;
+                if (! $variantId || ! $channel) continue;
+                $key = $variantId . '|' . $channel;
+                if (isset($seen[$key])) {
+                    $v->errors()->add("channel_skus.$i.channel", "Duplicate channel for this variant in this form.");
+                    continue;
+                }
+                $seen[$key] = true;
+            }
+        });
     }
 }

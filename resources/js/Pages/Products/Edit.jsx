@@ -4,12 +4,21 @@ import ProductForm from './Form';
 import useUnsavedChangesWarning from '@/Hooks/useUnsavedChangesWarning';
 import { Head, Link, useForm } from '@inertiajs/react';
 
-export default function ProductEdit({ product, categories, marketer_tiers = [], tier_prices = {} }) {
+export default function ProductEdit({
+    product,
+    categories,
+    brands = [],
+    channels = [],
+    channel_skus = [],
+    marketer_tiers = [],
+    tier_prices = {},
+}) {
     const { data, setData, put, processing, errors, isDirty } = useForm({
         name: product.name ?? '',
         sku: product.sku ?? '',
         barcode: product.barcode ?? '',
         category_id: product.category_id ?? '',
+        brand_id: product.brand_id ?? '',
         description: product.description ?? '',
         cost_price: product.cost_price ?? '0',
         selling_price: product.selling_price ?? '0',
@@ -21,6 +30,7 @@ export default function ProductEdit({ product, categories, marketer_tiers = [], 
         status: product.status ?? 'Active',
         price_change_reason: '',
         tier_prices: tier_prices ?? {},
+        channel_skus: channel_skus ?? [],
     });
 
     useUnsavedChangesWarning(isDirty);
@@ -36,7 +46,17 @@ export default function ProductEdit({ product, categories, marketer_tiers = [], 
             <PageHeader title={`Edit ${product.name}`} subtitle={`SKU ${product.sku}`} />
 
             <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5">
-                <ProductForm data={data} setData={setData} errors={errors} categories={categories} marketerTiers={marketer_tiers} isEdit />
+                <ProductForm
+                    data={data}
+                    setData={setData}
+                    errors={errors}
+                    categories={categories}
+                    brands={brands}
+                    channels={channels}
+                    productVariants={product.variants ?? []}
+                    marketerTiers={marketer_tiers}
+                    isEdit
+                />
 
                 <div className="mt-6 flex items-center justify-end gap-2">
                     <Link href={route('products.show', product.id)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">Cancel</Link>

@@ -1,6 +1,20 @@
 # Channel SKU & Marketplace Mapping
 
-> Status: **DESIGN ONLY.**
+> Status: **Foundation shipped in P-1 (2026-05-17).** Marketplace push API + Order Create search extension are still design-only.
+
+## 0. P-1 shipped scope (2026-05-17)
+
+- ✅ `product_channel_skus` table (migration `2026_05_17_100002_create_product_channel_skus_table.php`).
+- ✅ Schema differs from §3 below in two ways:
+  - `channel` is a **VARCHAR(32)**, not a DB ENUM. Reason: SQLite portability for tests, and adding a new marketplace (TikTok / Shopify) becomes a code-only change. Allowed values still come from `App\Models\ProductChannelSku::CHANNELS` and are enforced by the request validator.
+  - `external_barcode` (nullable) column added. Marketplaces sometimes print their own barcode alongside their SKU; ops needs both for reconciliation.
+- ✅ Channel SKU repeater in Product Edit (variant selector, channel dropdown, external SKU/barcode/URL, active toggle, notes).
+- ✅ Soft-retire only: "Retire" toggles `is_active=false`, never hard-deletes. Restore button reactivates.
+- ✅ In-form duplicate-`(variant, channel)` validation; DB unique index enforces the same invariant across requests.
+- ✅ Defence-in-depth in `ProductsController::syncChannelSkus()`: rows referencing a variant not owned by the current product are silently dropped, even if the client tampers with the payload.
+- ✅ Product index search now matches channel `external_sku` and `external_barcode` via EXISTS sub-query (left untouched: Order Create product search hot path — extended in a later phase).
+- ⛔ **Deferred:** `products.edit_channel_sku` permission slug — P-1 uses existing `products.edit`. Add slug when separation-of-duties demand surfaces.
+- ⛔ **Deferred:** Order Create product search extension. The doc text in §5 below ("After Phase 1, search also queries `product_channel_skus.external_sku`") applies to the **admin product index** as of P-1; the order-create endpoint remains on its original (name/sku/barcode) contract.
 
 ---
 

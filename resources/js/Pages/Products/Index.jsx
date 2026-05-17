@@ -11,7 +11,7 @@ function fmtMoney(n, sym = '') {
     return `${sym}${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-export default function ProductsIndex({ products, filters, categories }) {
+export default function ProductsIndex({ products, filters, categories, brands = [] }) {
     const can = useCan();
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
@@ -19,12 +19,18 @@ export default function ProductsIndex({ products, filters, categories }) {
     const [q, setQ] = useState(filters?.q ?? '');
     const [status, setStatus] = useState(filters?.status ?? '');
     const [categoryId, setCategoryId] = useState(filters?.category_id ?? '');
+    const [brandId, setBrandId] = useState(filters?.brand_id ?? '');
 
     const submit = (e) => {
         e?.preventDefault();
         router.get(
             route('products.index'),
-            { q: q || undefined, status: status || undefined, category_id: categoryId || undefined },
+            {
+                q: q || undefined,
+                status: status || undefined,
+                category_id: categoryId || undefined,
+                brand_id: brandId || undefined,
+            },
             { preserveState: true, preserveScroll: true, replace: true },
         );
     };
@@ -62,7 +68,7 @@ export default function ProductsIndex({ products, filters, categories }) {
                     <input
                         value={q}
                         onChange={(e) => setQ(e.target.value)}
-                        placeholder="Name, SKU, barcode…"
+                        placeholder="Name, SKU, barcode, variant SKU, channel SKU…"
                         className="mt-1 block w-full rounded-md border-slate-300 text-sm"
                     />
                 </div>
@@ -85,6 +91,15 @@ export default function ProductsIndex({ products, filters, categories }) {
                         ))}
                     </select>
                 </div>
+                <div>
+                    <label className="text-[11px] font-medium uppercase text-slate-500">Brand</label>
+                    <select value={brandId} onChange={(e) => setBrandId(e.target.value)} className="mt-1 rounded-md border-slate-300 text-sm">
+                        <option value="">Any</option>
+                        {brands.map((b) => (
+                            <option key={b.id} value={b.id}>{b.name}{b.is_active === false ? ' (inactive)' : ''}</option>
+                        ))}
+                    </select>
+                </div>
                 <button type="submit" className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white">Apply</button>
             </form>
 
@@ -95,6 +110,7 @@ export default function ProductsIndex({ products, filters, categories }) {
                             <th className="px-4 py-2.5">SKU</th>
                             <th className="px-4 py-2.5">Name</th>
                             <th className="px-4 py-2.5">Category</th>
+                            <th className="px-4 py-2.5">Brand</th>
                             <th className="px-4 py-2.5 text-right">Cost</th>
                             <th className="px-4 py-2.5 text-right">Selling</th>
                             <th className="px-4 py-2.5 text-right">Trade</th>
@@ -103,7 +119,7 @@ export default function ProductsIndex({ products, filters, categories }) {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                         {products.data.length === 0 && (
-                            <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-slate-400">No products yet.</td></tr>
+                            <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-slate-400">No products yet.</td></tr>
                         )}
                         {products.data.map((p) => (
                             <tr key={p.id} className="hover:bg-slate-50">
@@ -114,6 +130,7 @@ export default function ProductsIndex({ products, filters, categories }) {
                                     </Link>
                                 </td>
                                 <td className="px-4 py-2.5 text-slate-600">{p.category?.name || '—'}</td>
+                                <td className="px-4 py-2.5 text-slate-600">{p.brand?.name || <span className="text-slate-400">—</span>}</td>
                                 <td className="px-4 py-2.5 text-right tabular-nums">{fmtMoney(p.cost_price, sym)}</td>
                                 <td className="px-4 py-2.5 text-right tabular-nums">{fmtMoney(p.selling_price, sym)}</td>
                                 <td className="px-4 py-2.5 text-right tabular-nums">{fmtMoney(p.marketer_trade_price, sym)}</td>

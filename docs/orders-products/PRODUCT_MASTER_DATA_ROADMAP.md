@@ -145,13 +145,22 @@ CREATE TABLE product_price_tiers (
 
 ## 7. Do-now / Do-later
 
-### Must have now (Phase 1 — coding)
-- `brands` table + `products.brand_id` FK
-- `product_channel_skus` table
-- Permission slugs: `products.edit_brand`, `products.edit_channel_sku`
-- Product Create/Edit UI: Brand dropdown + Channel SKU repeater
-- Server-side product search includes brand keyword + channel SKU lookup
-- One-time backfill: leave `brand_id = NULL` until operator imports brand list
+### P-1 — Shipped (2026-05-17)
+- ✅ `brands` table with `name`, `slug`, `description`, `image_url`, `is_active`, `sort_order` (migration `2026_05_17_100000_create_brands_table.php`).
+- ✅ `products.brand_id` nullable FK with `ON DELETE SET NULL` (migration `2026_05_17_100001_add_brand_id_to_products_table.php`).
+- ✅ `product_channel_skus` table — variant FK, channel string, external_sku/barcode/url, is_active, notes; unique `(product_variant_id, channel)` (migration `2026_05_17_100002_create_product_channel_skus_table.php`). One extension on the design doc: `external_barcode` is added as a nullable column because some marketplaces print their own barcode and ops needs both for reconciliation.
+- ✅ `App\Models\Brand` + `App\Models\ProductChannelSku` with relationships wired into `Product` and `ProductVariant`.
+- ✅ Brand admin CRUD page at `/brands` (single-page modelled on Categories admin).
+- ✅ Quick-Brand modal inside Product Form (JSON path on `POST /brands`).
+- ✅ Product Create/Edit UI — Brand dropdown after Category.
+- ✅ Product Edit UI — Channel SKU repeater (variant selector, channel dropdown, external SKU/barcode/URL, active toggle, notes; soft-retire only — no hard delete).
+- ✅ Product Show — Brand badge + Channel SKUs table grouped by variant.
+- ✅ Product Index — Brand filter dropdown + Brand column.
+- ✅ Server-side product index search extended to match by variant SKU/barcode and channel SKU/barcode via EXISTS sub-queries.
+- ✅ Tests — `tests/Feature/Products/ProductBrandAndChannelSkuTest.php` (22 tests).
+- ⛔ **Deferred from doc spec:** `products.edit_brand` / `products.edit_channel_sku` permission slugs not added. P-1 piggybacks on existing `products.create` / `products.edit` per the brief. Add slugs in a follow-up phase only when separation-of-duties demand surfaces.
+- ⛔ **Deferred from doc spec:** Order Create product search (`/orders/products/search`) is NOT extended to channel SKUs in P-1. The hot-path query is left on the existing (name/sku/barcode) contract; the extension lives in a follow-up phase.
+- 📌 **Backfill:** No bulk backfill needed. Existing products keep `brand_id = NULL`; operators tag at their own pace.
 
 ### Should have soon (Phase 2–4)
 - Two-way VAT calculator + margin previewer in Product Edit (Phase 2)

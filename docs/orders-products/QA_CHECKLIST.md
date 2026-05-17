@@ -57,23 +57,29 @@
 
 ## 3. Brand selection (P-1)
 
-- [ ] **(P-1)** Brand dropdown lists active brands sorted alphabetically.
-- [ ] **(P-1)** Brand filter on the product index list returns matching products only.
-- [ ] **(P-1)** Editing a product's brand and saving updates the brand on the product row (live FK).
-- [ ] **(P-1)** Editing a product's brand AFTER an order has shipped does NOT change the brand on the order item snapshot (see §13 for the snapshot check that proves this).
-- [ ] **(P-1)** Creating a brand from a quick-create modal works and selects it immediately.
-- [ ] **(P-1)** Deleting an active brand is blocked if any product references it.
+**Shipped 2026-05-17** — auto-tested by `tests/Feature/Products/ProductBrandAndChannelSkuTest.php`. Re-run by hand at release time for UX regressions.
+
+- [x] **(P-1)** Brand dropdown lists active brands sorted by `sort_order` then alphabetically (active-only on Create form; all brands on the index filter).
+- [x] **(P-1)** Brand filter on the product index list returns matching products only.
+- [x] **(P-1)** Editing a product's brand and saving updates the brand on the product row (live FK).
+- [ ] **(P-1 → deferred to O-4)** Editing a product's brand AFTER an order has shipped does NOT change the brand on the order item snapshot — this becomes verifiable once O-4 ships `brand_id_snapshot` on `order_items`. P-1 cannot test this because the snapshot column doesn't exist yet.
+- [x] **(P-1)** Creating a brand from a quick-create modal works and selects it immediately (JSON path on `POST /brands`).
+- [x] **(P-1)** Deleting an active brand does NOT cascade to products; the brand_id is nulled out (ON DELETE SET NULL). This is safer than blocking the delete and matches the design.
 
 ---
 
 ## 4. Channel SKU entry (P-1)
 
-- [ ] **(P-1)** Channel SKU tab shows existing rows: `channel`, `sku`, `is_active`.
-- [ ] **(P-1)** Adding a Channel SKU with `(variant_id, channel)` matching an existing row → 422 (unique constraint).
-- [ ] **(P-1)** Adding a Channel SKU for a non-existent variant → 422.
-- [ ] **(P-1)** Channel enum accepts only: Internal / Amazon / Noon / Jumia / Website / Supplier / Other.
-- [ ] **(P-1)** Marking a row `is_active = false` hides it from any "find by channel SKU" lookup.
-- [ ] **(P-1)** Searching the product index by Channel SKU finds the product.
+**Shipped 2026-05-17.**
+
+- [x] **(P-1)** Channel SKUs table on Product Show is grouped by variant; rows display `channel`, `external_sku`, `external_barcode`, `external_url`, `is_active`.
+- [x] **(P-1)** Adding a Channel SKU with `(variant_id, channel)` matching an existing row in the SAME form payload → 422 with a field-level error.
+- [x] **(P-1)** DB unique constraint blocks the same `(variant_id, channel)` pair across requests (defence-in-depth if the validator is bypassed).
+- [x] **(P-1)** A Channel SKU row whose `product_variant_id` belongs to a different product is silently dropped by the controller (defence-in-depth).
+- [x] **(P-1)** Channel field accepts only: Internal / Website / Amazon / Noon / Jumia / Supplier / Other (enforced by request validator against `ProductChannelSku::CHANNELS`).
+- [x] **(P-1)** "Retire" button on an existing row sets `is_active = false`. The row stays in the database; UI shows it dimmed with a Restore button.
+- [x] **(P-1)** Searching the **admin product index** by external SKU or external barcode finds the product (EXISTS sub-query).
+- [ ] **(P-1 → deferred)** Order Create product search (`/orders/products/search`) finds products by channel SKU. **Not implemented in P-1** — hot-path; extended in a later phase.
 
 ---
 

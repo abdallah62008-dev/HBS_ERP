@@ -158,6 +158,8 @@ export const sidebarSections = [
         items: [
             { label: 'Products', href: '/products', icon: I.cube, permission: 'products.view' },
             { label: 'Categories', href: '/categories', icon: I.tag, permission: 'products.view' },
+            // P-1: Brands lookup table for product master data.
+            { label: 'Brands', href: '/brands', icon: I.tag, permission: 'products.view' },
             { label: 'Warehouses', href: '/warehouses', icon: I.buildingStorefront, permission: 'inventory.view' },
             { label: 'Inventory', href: '/inventory', icon: I.archiveBox, permission: 'inventory.view' },
             { label: 'Stock Movements', href: '/inventory/movements', icon: I.arrowsRightLeft, permission: 'inventory.view_movements' },

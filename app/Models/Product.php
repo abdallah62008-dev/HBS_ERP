@@ -13,7 +13,7 @@ class Product extends Model
     use HasFactory, SoftDeletes;
 
     protected $fillable = [
-        'name', 'sku', 'barcode', 'category_id', 'supplier_id',
+        'name', 'sku', 'barcode', 'category_id', 'brand_id', 'supplier_id',
         'image_url', 'description',
         'cost_price', 'selling_price', 'marketer_trade_price', 'minimum_selling_price',
         'tax_enabled', 'tax_rate', 'reorder_level', 'status',
@@ -35,6 +35,11 @@ class Product extends Model
     public function category(): BelongsTo
     {
         return $this->belongsTo(Category::class);
+    }
+
+    public function brand(): BelongsTo
+    {
+        return $this->belongsTo(Brand::class);
     }
 
     public function supplier(): BelongsTo

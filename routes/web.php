@@ -5,6 +5,7 @@ use App\Http\Controllers\ApprovalsController;
 use App\Http\Controllers\AttachmentsController;
 use App\Http\Controllers\AuditLogsController;
 use App\Http\Controllers\BackupsController;
+use App\Http\Controllers\BrandsController;
 use App\Http\Controllers\ExportsController;
 use App\Http\Controllers\ImportExportController;
 use App\Http\Controllers\ImportsController;
@@ -103,6 +104,19 @@ Route::middleware(['auth', 'active'])->group(function () {
         ->name('categories.update');
     Route::middleware('permission:products.delete')->delete('/categories/{category}', [CategoriesController::class, 'destroy'])
         ->name('categories.destroy');
+
+    /* ─────────────── Brands (Orders & Products P-1) ─────────────── */
+    // Brands piggyback on the existing products.* permission slugs per
+    // the P-1 brief — no new slugs added. Mirrors the categories route
+    // shape (single-page CRUD with inline edit + delete).
+    Route::middleware('permission:products.view')->get('/brands', [BrandsController::class, 'index'])
+        ->name('brands.index');
+    Route::middleware('permission:products.create')->post('/brands', [BrandsController::class, 'store'])
+        ->name('brands.store');
+    Route::middleware('permission:products.edit')->put('/brands/{brand}', [BrandsController::class, 'update'])
+        ->name('brands.update');
+    Route::middleware('permission:products.delete')->delete('/brands/{brand}', [BrandsController::class, 'destroy'])
+        ->name('brands.destroy');
 
     /* ─────────────── Products (Phase 2) ─────────────── */
     Route::middleware('permission:products.view')->get('/products', [ProductsController::class, 'index'])
