@@ -75,7 +75,11 @@ class OrdersController extends Controller
     public function index(Request $request): Response
     {
         $user = $request->user();
-        $filters = $request->only(['q', 'status', 'risk_level', 'shipping_status']);
+        // C-1: `customer_id` joins the filter set. The original phone-
+        // search via `q` stays — it's the ad-hoc fallback — but the
+        // indexed `customer_id` filter is the reliable path the
+        // Customer Show "View Orders" button uses.
+        $filters = $request->only(['q', 'status', 'risk_level', 'shipping_status', 'customer_id']);
 
         $orders = Order::query()
             ->forCurrentMarketer()
@@ -107,6 +111,10 @@ class OrdersController extends Controller
             ->when($filters['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
             ->when($filters['risk_level'] ?? null, fn ($q, $v) => $q->where('customer_risk_level', $v))
             ->when($filters['shipping_status'] ?? null, fn ($q, $v) => $q->where('shipping_status', $v))
+            // C-1: customer_id filter. Cast defensively so a non-numeric
+            // value (e.g. "abc" injected via URL) becomes 0 and produces
+            // an empty result set instead of a SQL error.
+            ->when((int) ($filters['customer_id'] ?? 0) > 0, fn ($q) => $q->where('customer_id', (int) $filters['customer_id']))
             ->latest('id')
             ->paginate(20)
             ->withQueryString();
@@ -116,11 +124,30 @@ class OrdersController extends Controller
         // is unchanged but the Inertia JSON output is sanitized.
         $orders->getCollection()->transform(fn (Order $o) => $this->sanitizeProfitFor($user, $o));
 
+        // C-1: when `customer_id` is set on the filter, resolve a slim
+        // customer summary so the UI can render a "Filtered by
+        // customer #X" pill without an extra round-trip. Null when the
+        // id is missing / invalid / soft-deleted — the orders list
+        // still renders (empty under that filter) but no pill.
+        $filterCustomer = null;
+        if ((int) ($filters['customer_id'] ?? 0) > 0) {
+            $filterCustomer = \App\Models\Customer::query()
+                ->whereNull('deleted_at')
+                ->where('id', (int) $filters['customer_id'])
+                ->first(['id', 'name', 'primary_phone']);
+        }
+
         return Inertia::render('Orders/Index', [
             'orders' => $orders,
             'filters' => $filters,
             'statuses' => Order::STATUSES,
             'can_view_profit' => (bool) $user?->hasPermission('orders.view_profit'),
+            // C-1: pill payload. `null` when no customer filter is active.
+            'filter_customer' => $filterCustomer ? [
+                'id' => (int) $filterCustomer->id,
+                'name' => $filterCustomer->name,
+                'primary_phone' => $filterCustomer->primary_phone,
+            ] : null,
         ]);
     }
 
@@ -128,6 +155,18 @@ class OrdersController extends Controller
     {
         $user = $request->user();
         $canViewProfit = (bool) $user?->hasPermission('orders.view_profit');
+
+        // C-1: optional "Add Order from Customer Show" prefill. When the
+        // user lands here via `?customer_id=<id>` we load a slim
+        // customer object (same shape as `duplicate_from.customer` so
+        // Create.jsx's existing matchedCustomer flow handles both
+        // paths). Fields are cost/profit-free by design.
+        //
+        // `duplicate_from` (O-1) takes precedence — if both query params
+        // are present, the duplicate flow wins because it already
+        // contains a (possibly different) customer reference.
+        $prefillCustomer = null;
+        $prefillCustomerId = (int) $request->query('customer_id', 0);
 
         // O-1: optional "Save & Duplicate" prefill. The previous Save call
         // redirected here with `?duplicate_from=<id>`; load a slim copy of
@@ -203,6 +242,44 @@ class OrdersController extends Controller
             }
         }
 
+        // C-1: resolve `?customer_id=` only when duplicate_from isn't
+        // already setting the customer. Duplicate-from wins because its
+        // payload contains items too — overriding it with a different
+        // customer would silently break the operator's intent.
+        if ($prefillCustomerId > 0 && $duplicateFrom === null) {
+            $customerModel = \App\Models\Customer::query()
+                ->whereNull('deleted_at')
+                ->find($prefillCustomerId);
+            if ($customerModel) {
+                // Cost/profit fields are deliberately excluded — the
+                // prefill payload is safe for any caller. Marketers
+                // browsing other marketers' customers can still hit
+                // this; the customer record itself isn't gated and the
+                // operator still has to pick items + click Save before
+                // anything materialises.
+                $prefillCustomer = [
+                    'id' => (int) $customerModel->id,
+                    'name' => $customerModel->name,
+                    'primary_phone' => $customerModel->primary_phone,
+                    'secondary_phone' => $customerModel->secondary_phone,
+                    'normalized_phone' => $customerModel->normalized_phone,
+                    'country_code' => $customerModel->country_code,
+                    'local_phone' => $customerModel->local_phone,
+                    'email' => $customerModel->email,
+                    'city' => $customerModel->city,
+                    'governorate' => $customerModel->governorate,
+                    'country' => $customerModel->country,
+                    'default_address' => $customerModel->default_address,
+                    'customer_type' => $customerModel->customer_type ?? null,
+                    'risk_level' => $customerModel->risk_level ?? null,
+                    'primary_phone_whatsapp' => (bool) ($customerModel->primary_phone_whatsapp ?? true),
+                ];
+            }
+            // Invalid / soft-deleted id → silently leave prefill_customer
+            // null. The page still renders; the operator searches by phone
+            // as usual.
+        }
+
         return Inertia::render('Orders/Create', [
             // Performance Phase 1: do NOT ship the full active product
             // catalogue. The page now calls `orders.products.search`
@@ -256,6 +333,10 @@ class OrdersController extends Controller
             //    only when the user landed via `?duplicate_from=<id>`.
             'can_print_label' => (bool) $user?->hasPermission('shipping.print_label'),
             'duplicate_from' => $duplicateFrom,
+            // C-1: customer prefill from `?customer_id=<id>`. Null when
+            // the param is absent / invalid / soft-deleted, or when
+            // duplicate_from is active.
+            'prefill_customer' => $prefillCustomer,
         ]);
     }
 

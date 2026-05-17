@@ -119,7 +119,7 @@ class CustomersController extends Controller
             ->with('success', 'Customer created.');
     }
 
-    public function show(Customer $customer): Response
+    public function show(Customer $customer, Request $request): Response
     {
         $customer->load([
             'tags',
@@ -127,9 +127,32 @@ class CustomersController extends Controller
             'orders' => fn ($q) => $q->latest('id')->limit(20),
         ]);
 
+        // C-1: ship the props the quick-action bar needs.
+        //
+        // `latest_order_id` is the most-recent "safe" order — Cancelled
+        // and Need Review orders are excluded so the "Duplicate Last
+        // Order" button never seeds a fresh order from something that
+        // was deliberately killed. The query uses the same
+        // `customer_id` index the rest of the controller uses; no
+        // schema change.
+        $user = $request->user();
+        $latestOrderId = \App\Models\Order::query()
+            ->where('customer_id', $customer->id)
+            ->whereNotIn('status', ['Cancelled', 'Need Review'])
+            ->latest('id')
+            ->value('id');
+
         return Inertia::render('Customers/Show', [
             'customer' => $customer,
             'risk_breakdown' => $this->riskService->calculate($customer),
+
+            // C-1 quick-action props. Keep the surface tiny — each prop
+            // has a single job and a clear data source.
+            'latest_order_id' => $latestOrderId,
+            'total_orders' => (int) $customer->orders()->count(),
+            'whatsapp_url' => $customer->whatsappUrl(),
+            'can_create_order' => (bool) $user?->hasPermission('orders.create'),
+            'can_view_orders' => (bool) $user?->hasPermission('orders.view'),
         ]);
     }
 

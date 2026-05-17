@@ -18,7 +18,7 @@ const QUICK_FILTERS = [
     { label: 'Cancelled', value: 'Cancelled' },
 ];
 
-export default function OrdersIndex({ orders, filters, statuses }) {
+export default function OrdersIndex({ orders, filters, statuses, filter_customer = null }) {
     const can = useCan();
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
@@ -32,10 +32,19 @@ export default function OrdersIndex({ orders, filters, statuses }) {
                 q: overrides.q ?? q ?? undefined,
                 status: overrides.status ?? filters?.status ?? undefined,
                 risk_level: overrides.risk_level ?? filters?.risk_level ?? undefined,
+                // C-1: preserve the customer_id filter across quick-filter
+                // clicks and searches so the operator's "View Orders"
+                // context isn't lost when they click "Delivered" / etc.
+                customer_id: overrides.customer_id !== undefined
+                    ? overrides.customer_id
+                    : (filters?.customer_id ?? undefined),
             },
             { preserveState: true, preserveScroll: true, replace: true },
         );
     };
+
+    // C-1: clear ONLY the customer_id filter while preserving status/q.
+    const clearCustomerFilter = () => apply({ customer_id: undefined });
 
     return (
         <AuthenticatedLayout header="Orders">
@@ -65,6 +74,34 @@ export default function OrdersIndex({ orders, filters, statuses }) {
                     </div>
                 }
             />
+
+            {/* C-1: customer filter pill. Renders only when arriving
+                via `?customer_id=`. Clicking the ✕ clears that filter
+                while preserving the rest (status, q, etc.). */}
+            {filter_customer && (
+                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs text-indigo-800">
+                    <span>
+                        Showing orders for{' '}
+                        <Link
+                            href={route('customers.show', filter_customer.id)}
+                            className="font-medium hover:underline"
+                        >
+                            {filter_customer.name}
+                        </Link>
+                        {filter_customer.primary_phone && (
+                            <span className="ml-1 text-indigo-500">· {filter_customer.primary_phone}</span>
+                        )}
+                    </span>
+                    <button
+                        type="button"
+                        onClick={clearCustomerFilter}
+                        className="ml-1 text-indigo-600 hover:text-indigo-900"
+                        aria-label="Clear customer filter"
+                    >
+                        ✕
+                    </button>
+                </div>
+            )}
 
             {/* Quick filters */}
             <div className="mb-4 flex flex-wrap gap-1.5">

@@ -19,6 +19,10 @@ export default function OrderCreate({
     // O-1: action gates + optional duplicate prefill.
     can_print_label = false,
     duplicate_from = null,
+    // C-1: optional customer prefill via `?customer_id=`. Null when no
+    // param, invalid id, or when duplicate_from is also set (the
+    // backend prefers duplicate_from in that case).
+    prefill_customer = null,
 }) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
@@ -322,6 +326,35 @@ export default function OrderCreate({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    /* ──────────────────── C-1: customer prefill ──────────────────── */
+    // When the user lands here via `?customer_id=<id>` (Customer Show →
+    // Add Order), hydrate the customer slot ONCE on mount. Skipped when
+    // duplicate_from is also set because that path already carries a
+    // (possibly different) customer.
+    //
+    // Items remain empty by design — the operator picks them. Only the
+    // customer + address are pre-filled.
+    useEffect(() => {
+        if (!prefill_customer || duplicate_from) return;
+        setData((prev) => ({
+            ...prev,
+            customer_id: prefill_customer.id ?? null,
+            customer_address: prefill_customer.default_address ?? prev.customer_address,
+            city: prefill_customer.city ?? prev.city,
+            governorate: prefill_customer.governorate ?? prev.governorate,
+            country: prefill_customer.country ?? prev.country,
+            customer_phone_secondary: prefill_customer.secondary_phone ?? prev.customer_phone_secondary,
+            customer_phone_whatsapp: prefill_customer.primary_phone_whatsapp ?? prev.customer_phone_whatsapp,
+        }));
+        // Show the green "existing customer" card by populating the
+        // matchedCustomer state directly — same shape the lookupByPhone
+        // endpoint returns. Avoids an extra round-trip.
+        if (prefill_customer.id) {
+            setMatchedCustomer(prefill_customer);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     /**
      * Performance Phase 1 — debounced server-side product search.
      *
@@ -561,6 +594,23 @@ export default function OrderCreate({
                                 {duplicate_from.source_order_number}
                             </Link>{' '}
                             <span className="text-[12px]">— customer, items, and shipping have been pre-filled. Adjust before saving.</span>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* C-1: customer prefill banner. Renders only when arriving
+                via `?customer_id=` (not via duplicate_from). Items remain
+                empty — operator picks them. */}
+            {prefill_customer && !duplicate_from && (
+                <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
+                    <div className="flex items-center justify-between gap-2">
+                        <div>
+                            <span className="font-semibold">Creating order for</span>{' '}
+                            <Link href={route('customers.show', prefill_customer.id)} className="font-medium text-emerald-700 hover:underline">
+                                {prefill_customer.name}
+                            </Link>{' '}
+                            <span className="text-[12px]">— customer details pre-filled. Add items below.</span>
                         </div>
                     </div>
                 </div>

@@ -175,6 +175,47 @@
 
 ---
 
+## 4a. Phase C-1 — Customer Show Quick Actions
+
+| Field | Value |
+|---|---|
+| Code | C-1 |
+| Risk | Low (controller-props + UX only) |
+| Depends on | O-1 (duplicate_from flow), O-2 (whatsappUrl) |
+| Effort | 1–2 dev-days |
+| Status | **Shipped 2026-05-17** |
+
+### Shipped
+- `CustomersController::show` ships 5 new props: `latest_order_id` (latest non-Cancelled, non-Need-Review order), `total_orders`, `whatsapp_url` (from `Customer::whatsappUrl()`), `can_create_order`, `can_view_orders`.
+- `OrdersController::create` reads `?customer_id=<id>` and ships `prefill_customer` (cost/profit-free slim payload). When both `customer_id` and `duplicate_from` are present, `duplicate_from` wins.
+- `OrdersController::index` accepts a `customer_id` filter and ships `filter_customer` for the UI pill. Non-numeric / unknown ids are handled defensively (cast to 0 / null filter_customer).
+- `Pages/Customers/Show.jsx` action bar: **+ Add Order** (primary) / **View Orders** / **Duplicate Last Order** / **🟢 WhatsApp** / **Edit** / **Delete**. Each button is a `Link` (or `<a>`) — never a POST.
+- "View all N →" shortcut under the recent-orders panel when there are more orders than the 20-row cap.
+- `Pages/Orders/Create.jsx` hydrates customer slot on mount from `prefill_customer` (items remain empty). Green "Creating order for {name}" banner.
+- `Pages/Orders/Index.jsx` renders an indigo "Showing orders for {name} ✕" pill when the filter is active. Clicking ✕ removes the `customer_id` filter while preserving status/q.
+- Tests: 17 new (6 + 6 + 5) in `tests/Feature/Customers/CustomerShowQuickActionsTest.php`, `tests/Feature/Orders/OrderCreateCustomerPrefillTest.php`, `tests/Feature/Orders/OrderIndexCustomerFilterTest.php`. Full regression: **511 / 511**.
+
+### Deferred items (per C-0 review)
+- ⛔ **Stats cards** (10 aggregates) — Phase C-2.
+- ⛔ **Customer activity timeline** — Phase C-3.
+- ⛔ **Customer notes table + UX** — Phase C-4.
+- ⛔ **Address book UX** — Phase C-4 (`customer_addresses` table already exists; just unused in app code).
+- ⛔ **Duplicate customer detection / merge** — Phase C-5.
+- ⛔ **WhatsApp message templates / automation** — Phase 7 / external (n8n).
+- ⛔ **Visual risk score (color bar) + recommendation copy** — Phase C-2.
+
+### Migrations
+- **None.** C-1 ships zero migrations and zero new permission slugs.
+
+### Exit criteria — verified
+- ✅ Customer Show renders the 4 quick-action buttons behind the correct permissions and data conditions.
+- ✅ Add Order opens Order Create with the customer pre-filled (no auto-create).
+- ✅ Duplicate Last Order excludes Cancelled / Need Review orders.
+- ✅ View Orders narrows the index by `customer_id` (real filter, not phone search).
+- ✅ WhatsApp button uses `Customer::whatsappUrl()` and respects the opt-out flag.
+
+---
+
 ## 5. Phase P-2 — Pricing UX
 
 | Field | Value |

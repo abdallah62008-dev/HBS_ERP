@@ -13,7 +13,17 @@ function Field({ label, value }) {
     );
 }
 
-export default function CustomerShow({ customer, risk_breakdown }) {
+export default function CustomerShow({
+    customer,
+    risk_breakdown,
+    // C-1 quick-action props. Defaults keep the page safe when an older
+    // controller payload is rendered (e.g. cached SSR output).
+    latest_order_id = null,
+    total_orders = 0,
+    whatsapp_url = null,
+    can_create_order = false,
+    can_view_orders = false,
+}) {
     const can = useCan();
 
     const handleDelete = () => {
@@ -27,9 +37,48 @@ export default function CustomerShow({ customer, risk_breakdown }) {
 
             <PageHeader
                 title={customer.name}
-                subtitle={`Customer #${customer.id} · ${customer.primary_phone}`}
+                subtitle={`Customer #${customer.id} · ${customer.primary_phone}${total_orders > 0 ? ` · ${total_orders} order${total_orders === 1 ? '' : 's'}` : ''}`}
                 actions={
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                        {/* C-1: Quick action bar. Each button is a Link
+                            (no POST) so we cannot accidentally create an
+                            order. Operator still has to click Save on
+                            the resulting Order Create page. */}
+                        {can_create_order && (
+                            <Link
+                                href={route('orders.create', { customer_id: customer.id })}
+                                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                            >
+                                + Add Order
+                            </Link>
+                        )}
+                        {can_view_orders && (
+                            <Link
+                                href={route('orders.index', { customer_id: customer.id })}
+                                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+                            >
+                                View Orders
+                            </Link>
+                        )}
+                        {can_create_order && latest_order_id && (
+                            <Link
+                                href={route('orders.create', { duplicate_from: latest_order_id })}
+                                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+                                title="Pre-fill a new order from this customer's most recent order"
+                            >
+                                Duplicate Last Order
+                            </Link>
+                        )}
+                        {whatsapp_url && (
+                            <a
+                                href={whatsapp_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+                            >
+                                <span aria-hidden="true">🟢</span> WhatsApp
+                            </a>
+                        )}
                         {can('customers.edit') && (
                             <Link
                                 href={route('customers.edit', customer.id)}
@@ -132,7 +181,18 @@ export default function CustomerShow({ customer, risk_breakdown }) {
             <div className="mt-6 rounded-lg border border-slate-200 bg-white">
                 <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
                     <h2 className="text-sm font-semibold text-slate-700">Recent orders</h2>
-                    <span className="text-xs text-slate-400">{customer.orders?.length ?? 0} most recent</span>
+                    <div className="flex items-center gap-3">
+                        <span className="text-xs text-slate-400">{customer.orders?.length ?? 0} most recent</span>
+                        {/* C-1: shortcut to the filtered orders index. */}
+                        {can_view_orders && total_orders > (customer.orders?.length ?? 0) && (
+                            <Link
+                                href={route('orders.index', { customer_id: customer.id })}
+                                className="text-xs font-medium text-indigo-600 hover:underline"
+                            >
+                                View all {total_orders} →
+                            </Link>
+                        )}
+                    </div>
                 </div>
 
                 {(!customer.orders || customer.orders.length === 0) ? (

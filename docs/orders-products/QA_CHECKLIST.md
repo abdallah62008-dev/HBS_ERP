@@ -161,6 +161,32 @@
 
 ---
 
+## 8a. Customer Show quick actions (C-1)
+
+**Shipped 2026-05-17.** Auto-tested by `tests/Feature/Customers/CustomerShowQuickActionsTest.php` (6 tests) + `tests/Feature/Orders/OrderCreateCustomerPrefillTest.php` (6 tests) + `tests/Feature/Orders/OrderIndexCustomerFilterTest.php` (5 tests).
+
+- [x] **(C-1)** Customer Show renders an action bar with: + Add Order / View Orders / Duplicate Last Order / 🟢 WhatsApp / Edit / Delete.
+- [x] **(C-1)** Each quick-action button is a `Link` (no POST) — clicking never auto-creates an order.
+- [x] **(C-1)** "+ Add Order" links to `/orders/create?customer_id={id}`; Order Create pre-fills the customer slot but items remain empty.
+- [x] **(C-1)** Green "Creating order for {customer name}" banner shows on Order Create when arriving via `?customer_id=`.
+- [x] **(C-1)** "View Orders" links to `/orders?customer_id={id}` and uses an indexed filter, not phone search.
+- [x] **(C-1)** Orders Index renders a "Showing orders for {name} ✕" pill when `customer_id` filter is active; clicking ✕ clears only that filter.
+- [x] **(C-1)** "Duplicate Last Order" is hidden when the customer has no orders.
+- [x] **(C-1)** "Duplicate Last Order" excludes Cancelled / Need Review orders when picking the latest source order.
+- [x] **(C-1)** "Duplicate Last Order" reuses O-1's `?duplicate_from=` flow — cost / profit fields are NOT in the prefill payload.
+- [x] **(C-1)** WhatsApp button is hidden when `whatsapp_url` is null (no normalized phone OR `primary_phone_whatsapp = false`).
+- [x] **(C-1)** When both `customer_id` and `duplicate_from` are sent to Order Create, the duplicate_from path wins (the prefill_customer prop is null).
+- [x] **(C-1)** Soft-deleted customer ids passed via `?customer_id=` render an empty prefill — no leak.
+- [x] **(C-1)** Non-numeric / unknown `customer_id` on Orders Index does not crash; filter_customer prop is null.
+- [x] **(C-1)** "View all N →" link appears under the recent-orders panel when total_orders > recent count.
+- [ ] **(C-1 → deferred to C-2)** Stats cards (total / delivered / returned / cancelled / spent / outstanding / COD success / return rate / AOV / last order).
+- [ ] **(C-1 → deferred to C-3)** Customer activity timeline.
+- [ ] **(C-1 → deferred to C-4)** Customer notes table + UX.
+- [ ] **(C-1 → deferred to C-4)** Address book UX (`customer_addresses` table exists but unused).
+- [ ] **(C-1 → deferred to C-5)** Duplicate customer alert / merge workflow.
+
+---
+
 ## 9. Save & Add New (O-1)
 
 - [ ] **(O-1)** Submitting "Save & Add New" preserves: branch, source, marketer (operator option to keep or reset).
