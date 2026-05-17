@@ -2,7 +2,7 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import StatusBadge from '@/Components/StatusBadge';
 import useCan from '@/Hooks/useCan';
-import { Head, Link, router, usePage } from '@inertiajs/react';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 
 function Field({ label, value }) {
     return (
@@ -105,6 +105,11 @@ export default function CustomerShow({
     risk_recommendation = null,
     // C-3: read-only activity timeline (capped at 30 events).
     timeline = [],
+    // C-4A: structured customer notes (latest 50 from the new
+    // `customer_notes` table). Separate from the legacy
+    // `customer.notes` free-text column.
+    customer_notes = [],
+    can_delete_customer = false,
 }) {
     const can = useCan();
     const { props } = usePage();
@@ -113,6 +118,26 @@ export default function CustomerShow({
     const handleDelete = () => {
         if (!confirm(`Delete customer "${customer.name}"? This is a soft delete and can be restored.`)) return;
         router.delete(route('customers.destroy', customer.id));
+    };
+
+    /* C-4A: customer notes inline form state. Uses Inertia useForm so
+       validation errors land on `noteForm.errors.note`. The submit
+       handler resets only the note body after a successful POST so the
+       internal/external preference stays sticky. */
+    const noteForm = useForm({ note: '', is_internal: true });
+    const submitNote = (e) => {
+        e.preventDefault();
+        if (!noteForm.data.note.trim() || noteForm.processing) return;
+        noteForm.post(route('customers.notes.store', customer.id), {
+            preserveScroll: true,
+            onSuccess: () => noteForm.reset('note'),
+        });
+    };
+    const deleteNote = (noteId) => {
+        if (!confirm('Delete this note? This cannot be undone.')) return;
+        router.delete(route('customers.notes.destroy', [customer.id, noteId]), {
+            preserveScroll: true,
+        });
     };
 
     return (
@@ -205,6 +230,102 @@ export default function CustomerShow({
                     <p className="mt-1.5 text-[11px] text-amber-700">
                         Same normalized phone as this customer. Review and merge manually if these are the same person.
                     </p>
+                </div>
+            )}
+
+            {/* C-4A: Customer notes panel. Add-note form + list of the
+                latest 50 notes (newest first). Internal/external badge
+                per row. Delete gated by `can_delete_customer`. */}
+            {can('customers.view') && (
+                <div className="mb-4 rounded-lg border border-slate-200 bg-white">
+                    <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+                        <h2 className="text-sm font-semibold text-slate-700">Notes</h2>
+                        <span className="text-xs text-slate-400">
+                            {customer_notes.length === 0
+                                ? 'No notes yet'
+                                : `${customer_notes.length} note${customer_notes.length === 1 ? '' : 's'}`}
+                        </span>
+                    </div>
+
+                    {can('customers.edit') && (
+                        <form onSubmit={submitNote} className="border-b border-slate-100 px-5 py-3">
+                            <label htmlFor="customer-note-body" className="sr-only">Add a note</label>
+                            <textarea
+                                id="customer-note-body"
+                                rows={2}
+                                value={noteForm.data.note}
+                                onChange={(e) => noteForm.setData('note', e.target.value)}
+                                placeholder="Add a note about this customer (delivery preference, do-not-call, address quirk…)"
+                                maxLength={5000}
+                                className="block w-full rounded-md border-slate-300 text-sm"
+                                disabled={noteForm.processing}
+                            />
+                            {noteForm.errors.note && (
+                                <p className="mt-1 text-xs text-red-600">{noteForm.errors.note}</p>
+                            )}
+                            <div className="mt-2 flex items-center justify-between gap-2">
+                                <label className="flex items-center gap-2 text-xs text-slate-600">
+                                    <input
+                                        type="checkbox"
+                                        checked={noteForm.data.is_internal}
+                                        onChange={(e) => noteForm.setData('is_internal', e.target.checked)}
+                                        className="rounded border-slate-300"
+                                    />
+                                    Internal only (not customer-facing)
+                                </label>
+                                <button
+                                    type="submit"
+                                    disabled={!noteForm.data.note.trim() || noteForm.processing}
+                                    className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+                                >
+                                    {noteForm.processing ? 'Saving…' : 'Add note'}
+                                </button>
+                            </div>
+                        </form>
+                    )}
+
+                    {customer_notes.length === 0 ? (
+                        <div className="px-5 py-6 text-center text-xs text-slate-400">
+                            No notes recorded yet.
+                        </div>
+                    ) : (
+                        <ul className="divide-y divide-slate-100">
+                            {customer_notes.map((n) => (
+                                <li key={n.id} className="px-5 py-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="mb-1 flex flex-wrap items-center gap-2">
+                                                <span className={
+                                                    'rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ' +
+                                                    (n.is_internal
+                                                        ? 'bg-slate-200 text-slate-700'
+                                                        : 'bg-amber-100 text-amber-800')
+                                                }>
+                                                    {n.is_internal ? 'Internal' : 'External'}
+                                                </span>
+                                                {n.created_by?.name && (
+                                                    <span className="text-[11px] text-slate-500">by {n.created_by.name}</span>
+                                                )}
+                                                <span className="text-[11px] text-slate-400" title={n.created_at || ''}>
+                                                    {fmtTimelineTimestamp(n.created_at)}
+                                                </span>
+                                            </div>
+                                            <div className="whitespace-pre-wrap text-sm text-slate-700">{n.note}</div>
+                                        </div>
+                                        {can_delete_customer && (
+                                            <button
+                                                type="button"
+                                                onClick={() => deleteNote(n.id)}
+                                                className="shrink-0 text-[11px] text-red-600 hover:underline"
+                                            >
+                                                Delete
+                                            </button>
+                                        )}
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
             )}
 

@@ -95,6 +95,15 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:customers.delete')->delete('/customers/{customer}', [CustomersController::class, 'destroy'])
         ->name('customers.destroy');
 
+    /* ─────────────── Customer notes (C-4A) ─────────────── */
+    // No new permission slugs — store reuses `customers.edit`,
+    // destroy reuses `customers.delete`. Mirrors how categories.*
+    // actions piggyback on products.* slugs.
+    Route::middleware('permission:customers.edit')->post('/customers/{customer}/notes', [CustomersController::class, 'storeNote'])
+        ->name('customers.notes.store');
+    Route::middleware('permission:customers.delete')->delete('/customers/{customer}/notes/{note}', [CustomersController::class, 'destroyNote'])
+        ->name('customers.notes.destroy');
+
     /* ─────────────── Categories (Phase 2) ─────────────── */
     Route::middleware('permission:products.view')->get('/categories', [CategoriesController::class, 'index'])
         ->name('categories.index');

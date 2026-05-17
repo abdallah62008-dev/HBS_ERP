@@ -57,6 +57,21 @@ class Customer extends Model
         return $this->hasMany(Order::class);
     }
 
+    /**
+     * C-4A: structured customer notes (separate from the legacy
+     * `customers.notes` text column).
+     *
+     * IMPORTANT — the relation is NOT named `notes()` because that
+     * collides with the `notes` text column on the customers table.
+     * Eloquent would silently shadow the attribute and the relation
+     * would compete with `$customer->notes` writes. `customerNotes()`
+     * keeps both surfaces accessible.
+     */
+    public function customerNotes(): HasMany
+    {
+        return $this->hasMany(CustomerNote::class);
+    }
+
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');

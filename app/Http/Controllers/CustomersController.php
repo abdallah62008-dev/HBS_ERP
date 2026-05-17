@@ -156,6 +156,25 @@ class CustomersController extends Controller
         // refunds. Capped at 30 events. No writes, no policy changes.
         $timeline = $this->customerTimeline($customer);
 
+        // C-4A: structured customer notes (latest 50). Separate from
+        // the legacy `customers.notes` text column.
+        $customerNotes = $customer->customerNotes()
+            ->with('createdBy:id,name')
+            ->latest('id')
+            ->limit(50)
+            ->get(['id', 'customer_id', 'note', 'is_internal', 'created_by', 'created_at'])
+            ->map(fn ($n) => [
+                'id' => (int) $n->id,
+                'note' => $n->note,
+                'is_internal' => (bool) $n->is_internal,
+                'created_at' => optional($n->created_at)->toIso8601String(),
+                'created_by' => $n->createdBy ? [
+                    'id' => (int) $n->createdBy->id,
+                    'name' => $n->createdBy->name,
+                ] : null,
+            ])
+            ->all();
+
         return Inertia::render('Customers/Show', [
             'customer' => $customer,
             'risk_breakdown' => $riskBreakdown,
@@ -175,7 +194,73 @@ class CustomersController extends Controller
 
             // C-3: read-only activity timeline.
             'timeline' => $timeline,
+
+            // C-4A: structured customer notes (separate from the
+            // free-text `customers.notes` column). Also drives a new
+            // event type in `customerTimeline()`.
+            'customer_notes' => $customerNotes,
+            // Surface delete permission for the per-note delete button.
+            // The customers.delete slug is the existing surface for any
+            // destructive customer-side action.
+            'can_delete_customer' => (bool) $user?->hasPermission('customers.delete'),
         ]);
+    }
+
+    /**
+     * C-4A: store a structured customer note.
+     *
+     * Permission gating is enforced at the route layer
+     * (`permission:customers.edit`). This method only needs to validate
+     * input and write the row.
+     */
+    public function storeNote(Request $request, Customer $customer): RedirectResponse
+    {
+        $data = $request->validate([
+            'note' => ['required', 'string', 'max:5000'],
+            'is_internal' => ['nullable', 'boolean'],
+        ]);
+
+        $note = $customer->customerNotes()->create([
+            'note' => $data['note'],
+            'is_internal' => array_key_exists('is_internal', $data)
+                ? (bool) $data['is_internal']
+                : true,
+            'created_by' => Auth::id(),
+        ]);
+
+        AuditLogService::logModelChange($note, 'created', 'customers');
+
+        return redirect()
+            ->route('customers.show', $customer)
+            ->with('success', 'Note added.');
+    }
+
+    /**
+     * C-4A: delete a structured customer note.
+     *
+     * Defence-in-depth — verify the note actually belongs to the URL
+     * customer before deleting. Without this check a privileged user
+     * could pass a customer_id of customer A with a note_id from
+     * customer B and remove the wrong row.
+     */
+    public function destroyNote(Customer $customer, \App\Models\CustomerNote $note): RedirectResponse
+    {
+        if ((int) $note->customer_id !== (int) $customer->id) {
+            abort(404);
+        }
+
+        $note->delete();
+
+        AuditLogService::log(
+            action: 'deleted',
+            module: 'customers',
+            recordType: \App\Models\CustomerNote::class,
+            recordId: $note->id,
+        );
+
+        return redirect()
+            ->route('customers.show', $customer)
+            ->with('success', 'Note removed.');
     }
 
     /**
@@ -510,6 +595,35 @@ class CustomersController extends Controller
                     'meta' => ['refund_id' => $rf->id],
                 ];
             }
+        }
+
+        // 6. Customer notes (C-4A). Indexed by (customer_id, created_at)
+        //    so the per-customer scan is cheap. Note body is truncated
+        //    to a preview for the timeline subtitle — full body lives
+        //    only on the Notes panel.
+        $notes = \App\Models\CustomerNote::query()
+            ->where('customer_id', $customer->id)
+            ->with('createdBy:id,name')
+            ->latest('id')
+            ->limit($cap)
+            ->get(['id', 'customer_id', 'note', 'is_internal', 'created_by', 'created_at']);
+
+        foreach ($notes as $n) {
+            $preview = mb_substr((string) $n->note, 0, 80);
+            if (mb_strlen((string) $n->note) > 80) {
+                $preview .= '…';
+            }
+            $events[] = [
+                'id' => "customer_note_added:{$n->id}",
+                'type' => 'customer_note_added',
+                'title' => $n->is_internal ? 'Internal note added' : 'External note added',
+                'subtitle' => $preview,
+                'timestamp' => optional($n->created_at)->toIso8601String(),
+                'actor_name' => optional($n->createdBy)->name,
+                'tone' => 'default',
+                'href' => null,
+                'meta' => ['is_internal' => (bool) $n->is_internal],
+            ];
         }
 
         // Sort merged events by timestamp DESC. Events with null

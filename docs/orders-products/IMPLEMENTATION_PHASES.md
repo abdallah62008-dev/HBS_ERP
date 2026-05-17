@@ -303,6 +303,52 @@
 
 ---
 
+## 4d. Phase C-4A — Customer Notes Foundation
+
+| Field | Value |
+|---|---|
+| Code | C-4A |
+| Risk | Low (additive — one new table) |
+| Depends on | C-3 (timeline integration) |
+| Effort | 0.5–1 dev-day |
+| Status | **Shipped 2026-05-17** |
+
+### Shipped
+- 1 additive migration: `create_customer_notes_table` — `id`, `customer_id` (FK cascade), `note` (text), `is_internal` (bool default true), `created_by` (FK users nullOnDelete), timestamps + composite index `(customer_id, created_at)`.
+- New `App\Models\CustomerNote` (mirrors `OrderNote`).
+- `Customer::customerNotes()` relation — deliberately NOT named `notes()` to avoid collision with the legacy `customers.notes` text column.
+- `CustomersController::show()` ships a `customer_notes` prop (latest 50) + `can_delete_customer` permission flag.
+- 2 new endpoints: `POST /customers/{customer}/notes` (gated by `customers.edit`), `DELETE /customers/{customer}/notes/{note}` (gated by `customers.delete`). **Zero new permission slugs** — reuses existing `customers.edit` / `customers.delete`.
+- Defence-in-depth on delete: the URL `customer_id` must match the note's `customer_id`, else 404 — prevents wrong-row deletion across tabs.
+- Audit-log entries on `created` and `deleted` events (module = `customers`).
+- C-3 timeline gains a 6th source: `customer_note_added` events with body preview (80 chars) and internal/external metadata.
+- `Pages/Customers/Show.jsx`: new Notes panel between the duplicate alert and the stats grid. Inline add-form (textarea + internal-only checkbox + Save). Per-note row with internal/external badge, actor, timestamp, and delete (confirm) when the user has `customers.delete`.
+- Tests: 9 in `tests/Feature/Customers/CustomerNotesTest.php`. Full regression: **541 / 541**.
+
+### Deferred items (per C-4 review)
+- ⛔ **Address book UX (C-4B)** — uses existing `customer_addresses` table; UX-only.
+- ⛔ **Address selector on Order Create** — defer until O-3 districts ship the full address tree.
+- ⛔ **Notes-as-blocking-warning in Order Create** — defer (current C-1 prefill banner is enough).
+- ⛔ **Pinned notes** — out of scope until ops asks.
+- ⛔ **Note categories / tags** — out of scope.
+- ⛔ **Customer-facing (external) notes UI** — `is_internal` flag is in place but the customer-facing surface doesn't exist.
+- ⛔ **Soft-delete on notes** — hard delete only in C-4A; audit log captures the action.
+- ⛔ **Duplicate merge workflow** — Phase C-5.
+- ⛔ **WhatsApp message templates / n8n automation** — Phase 7.
+
+### Migrations / permissions
+- **1 additive migration. 0 new permission slugs.**
+
+### Exit criteria — verified
+- ✅ Notes panel renders on Customer Show.
+- ✅ Notes are scoped to the correct customer; no cross-customer leak.
+- ✅ Empty notes rejected at validation.
+- ✅ Delete endpoint refuses to delete a note belonging to a different customer.
+- ✅ Notes show up in the C-3 timeline as `customer_note_added` events with body preview.
+- ✅ Existing `customers.notes` text column untouched (back-compat preserved).
+
+---
+
 ## 5. Phase P-2 — Pricing UX
 
 | Field | Value |

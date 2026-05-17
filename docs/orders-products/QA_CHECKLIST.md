@@ -224,7 +224,28 @@
 - [ ] **(C-3 → deferred)** Audit log events — broad IN-list against `audit_logs.record_id` has unclear scale. Revisit after a per-customer audit view spec.
 - [ ] **(C-3 → deferred)** Shipment events — order_status_changed covers the shipping lifecycle at the order level for now.
 - [ ] **(C-3 → deferred)** Collection events — duplicates order info pre-O-5.
-- [ ] **(C-3 → deferred to C-4)** Customer-note timeline events — depends on `customer_notes` table.
+- [x] **(C-3 → shipped in C-4A 2026-05-17)** Customer-note timeline events — `customer_notes` table now exists; events surface in the timeline.
+
+---
+
+## 8d. Customer Notes (C-4A)
+
+**Shipped 2026-05-17.** Auto-tested by `tests/Feature/Customers/CustomerNotesTest.php` (9 tests).
+
+- [x] **(C-4A)** Customer Show renders a "Notes" panel between the duplicate alert and the stats grid.
+- [x] **(C-4A)** Add-note inline form (textarea + internal-only checkbox + Save) gated by `customers.edit`.
+- [x] **(C-4A)** Empty / whitespace-only notes are rejected with a field-level error.
+- [x] **(C-4A)** Each saved note displays: internal/external badge, actor name, timestamp, body (wrapping preserved).
+- [x] **(C-4A)** Per-note Delete button visible only when the user holds `customers.delete`; confirmation prompt before destructive action.
+- [x] **(C-4A)** Notes are scoped to the correct customer — `customer_notes` panel for customer A never shows customer B's rows.
+- [x] **(C-4A)** Delete endpoint refuses to delete a note belonging to a different customer (404 on cross-customer attempts).
+- [x] **(C-4A)** C-3 activity timeline picks up `customer_note_added` events with title "Internal note added" / "External note added" + body preview (≤ 80 chars).
+- [x] **(C-4A)** Audit log row written on note create and note delete (module = `customers`).
+- [x] **(C-4A)** Existing free-text `customer.notes` column still renders in the profile card — untouched by C-4A.
+- [ ] **(C-4A → deferred to C-4B)** Address book UX on Customer Show.
+- [ ] **(C-4A → deferred to combined C-4B/O-3)** Address selector on Order Create when arriving via `?customer_id=`.
+- [ ] **(C-4A → deferred)** Pinned notes / note categories / soft-delete on notes.
+- [ ] **(C-4A → deferred to C-5)** Duplicate customer merge workflow.
 
 ---
 
