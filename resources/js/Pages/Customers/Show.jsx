@@ -2,7 +2,7 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import PageHeader from '@/Components/PageHeader';
 import StatusBadge from '@/Components/StatusBadge';
 import useCan from '@/Hooks/useCan';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 
 function Field({ label, value }) {
     return (
@@ -11,6 +11,42 @@ function Field({ label, value }) {
             <div className="mt-0.5 text-sm text-slate-800">{value || <span className="text-slate-400">—</span>}</div>
         </div>
     );
+}
+
+/**
+ * C-2: compact stat card. Money values are formatted with the system
+ * currency symbol; count values use `tabular-nums` so the numbers line
+ * up cleanly across cards.
+ */
+function StatCard({ label, value, hint, tone = 'default' }) {
+    const toneClasses = {
+        default: 'border-slate-200 bg-white',
+        amber: 'border-amber-200 bg-amber-50',
+        emerald: 'border-emerald-200 bg-emerald-50',
+        slate: 'border-slate-200 bg-slate-50',
+    }[tone] ?? 'border-slate-200 bg-white';
+    return (
+        <div className={`rounded-lg border ${toneClasses} p-3`}>
+            <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">{label}</div>
+            <div className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
+                {value === null || value === undefined || value === '' ? <span className="text-slate-400">—</span> : value}
+            </div>
+            {hint && <div className="mt-0.5 text-[10px] text-slate-400">{hint}</div>}
+        </div>
+    );
+}
+
+function fmtMoney(n, sym = '') {
+    if (n === null || n === undefined) return null;
+    return `${sym}${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+function fmtPercent(n) {
+    if (n === null || n === undefined) return null;
+    return `${Number(n).toFixed(1)}%`;
+}
+function fmtDate(iso) {
+    if (!iso) return null;
+    return String(iso).split('T')[0];
 }
 
 export default function CustomerShow({
@@ -23,8 +59,14 @@ export default function CustomerShow({
     whatsapp_url = null,
     can_create_order = false,
     can_view_orders = false,
+    // C-2: stats + duplicate alert + risk recommendation.
+    stats = null,
+    duplicate_customers = [],
+    risk_recommendation = null,
 }) {
     const can = useCan();
+    const { props } = usePage();
+    const sym = props.app?.currency_symbol ?? '';
 
     const handleDelete = () => {
         if (!confirm(`Delete customer "${customer.name}"? This is a soft delete and can be restored.`)) return;
@@ -100,6 +142,66 @@ export default function CustomerShow({
                 }
             />
 
+            {/* C-2: duplicate-customer alert. Read-only — clicking the
+                link navigates to the other customer's profile. No merge
+                in this phase. */}
+            {Array.isArray(duplicate_customers) && duplicate_customers.length > 0 && (
+                <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm" role="status">
+                    <div className="font-semibold text-amber-900">
+                        Possible duplicate customer{duplicate_customers.length === 1 ? '' : 's'} found
+                    </div>
+                    <ul className="mt-1.5 list-disc pl-5 text-[12px] text-amber-900">
+                        {duplicate_customers.map((d) => (
+                            <li key={d.id}>
+                                <Link href={route('customers.show', d.id)} className="font-medium hover:underline">
+                                    {d.name}
+                                </Link>{' '}
+                                <span className="text-amber-700">· {d.primary_phone}</span>
+                            </li>
+                        ))}
+                    </ul>
+                    <p className="mt-1.5 text-[11px] text-amber-700">
+                        Same normalized phone as this customer. Review and merge manually if these are the same person.
+                    </p>
+                </div>
+            )}
+
+            {/* C-2: Customer 360 stats cards. Compact grid right above the
+                profile + risk panel. Money values use the system currency
+                symbol; rates display percentages; nulls show as "—". */}
+            {stats && (
+                <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                    <StatCard label="Total orders" value={stats.total_orders} />
+                    <StatCard label="Delivered" value={stats.delivered_orders} tone="emerald" />
+                    <StatCard label="Returned" value={stats.returned_orders} tone={stats.returned_orders > 0 ? 'amber' : 'default'} />
+                    <StatCard label="Cancelled" value={stats.cancelled_orders} tone="slate" />
+                    <StatCard label="Last order" value={fmtDate(stats.last_order_at)} />
+                    <StatCard label="Total spent" value={fmtMoney(stats.total_spent, sym)} hint="Delivered orders only" />
+                    <StatCard
+                        label="Estimated outstanding"
+                        value={fmtMoney(stats.outstanding_balance, sym)}
+                        hint="Open COD balances"
+                        tone={stats.outstanding_balance > 0 ? 'amber' : 'default'}
+                    />
+                    <StatCard
+                        label="COD success"
+                        value={fmtPercent(stats.cod_success_rate)}
+                        hint={stats.cod_orders > 0 ? `${stats.cod_collected_orders}/${stats.cod_orders} collected` : 'No COD orders'}
+                    />
+                    <StatCard
+                        label="Return rate"
+                        value={fmtPercent(stats.return_rate)}
+                        hint={stats.return_rate !== null ? 'Returned / (Delivered + Returned)' : null}
+                        tone={stats.return_rate !== null && stats.return_rate >= 20 ? 'amber' : 'default'}
+                    />
+                    <StatCard
+                        label="Avg order value"
+                        value={fmtMoney(stats.average_order_value, sym)}
+                        hint="Delivered avg"
+                    />
+                </div>
+            )}
+
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 {/* Profile card */}
                 <div className="lg:col-span-2 rounded-lg border border-slate-200 bg-white p-5">
@@ -160,6 +262,13 @@ export default function CustomerShow({
                         <div className="text-3xl font-semibold tabular-nums text-slate-800">
                             {risk_breakdown.score}<span className="text-base text-slate-400">/100</span>
                         </div>
+                        {/* C-2: operational guidance copy. Pure read-only
+                            — the order flow is NEVER blocked by this. */}
+                        {risk_recommendation && (
+                            <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-1.5 text-[11px] text-slate-600">
+                                {risk_recommendation}
+                            </div>
+                        )}
                         <div className="mt-3 space-y-1 text-xs text-slate-500">
                             {Object.keys(risk_breakdown.breakdown).length === 0 && (
                                 <div className="text-slate-400">No history yet — score is 0.</div>

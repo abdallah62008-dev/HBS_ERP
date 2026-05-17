@@ -216,6 +216,48 @@
 
 ---
 
+## 4b. Phase C-2 — Customer 360 Stats Cards
+
+| Field | Value |
+|---|---|
+| Code | C-2 |
+| Risk | Low (read-only aggregates) |
+| Depends on | C-1 (Customer Show props), O-2 (normalized_phone for duplicate alert) |
+| Effort | 1 dev-day |
+| Status | **Shipped 2026-05-17** |
+
+### Shipped
+- `CustomersController::show` ships 3 new props:
+  - `stats` — 12 aggregate fields computed in one indexed SUM-CASE query (`customer_id` index): `total_orders`, `delivered_orders`, `returned_orders`, `cancelled_orders`, `total_spent` (Delivered only), `outstanding_balance` (estimated; sum of `cod_amount` on open collections), `cod_orders`, `cod_collected_orders`, `cod_success_rate`, `return_rate`, `average_order_value`, `last_order_at`.
+  - `duplicate_customers` — non-deleted customers sharing the current `normalized_phone`, excluding self. Capped at 5; read-only — merge is C-5.
+  - `risk_recommendation` — pure mapping of `risk_breakdown.level` → operator copy (Low → "Normal order flow." / Medium → "Review recent history before shipping." / High → "Confirm carefully before shipping or COD."). **Order flow remains unblocked** regardless of level.
+- New private helpers on `CustomersController`: `customerStats()`, `duplicateCustomers()`, `riskRecommendation()`. No new service class needed.
+- `Pages/Customers/Show.jsx`:
+  - Compact 5-column stat-card grid above the profile/risk row. Money uses the system currency symbol; rates show as percentages; null values render as "—".
+  - Amber duplicate-customer alert at the top of the page when `duplicate_customers.length > 0`. Each row links to the other customer.
+  - Risk panel gains a one-line recommendation chip under the score.
+- Tests: 9 new in `tests/Feature/Customers/Customer360StatsTest.php`. Full regression: **520 / 520**.
+
+### Math contracts pinned by tests
+- `total_spent` = Delivered orders' `total_amount` only — never Returned / Cancelled.
+- `average_order_value` = `total_spent / delivered_orders`. Null when delivered = 0.
+- `cod_success_rate` = `(Collected + Settlement Received) / (cod_amount > 0)`. Null when no COD orders.
+- `return_rate` = `Returned / (Delivered + Returned)`. Null when both are zero.
+- `outstanding_balance` = `SUM(cod_amount)` where `collection_status IN ('Not Collected','Partially Collected','Pending Settlement','Rejected')` — labeled "Estimated outstanding" in the UI because the pre-O-5 single-COD model can't reflect multi-payment splits.
+
+### Migrations / permissions
+- **None.** C-2 ships zero migrations, zero new permission slugs, zero `.env` changes, zero package installs.
+
+### Deferred items (per C-0 roadmap)
+- ⛔ Customer activity timeline — **C-3**.
+- ⛔ Customer notes (new table) — **C-4**.
+- ⛔ Address book UX — **C-4** (`customer_addresses` table exists; unused in app code).
+- ⛔ Duplicate merge workflow — **C-5**.
+- ⛔ WhatsApp message templates / n8n automation — **Phase 7**.
+- ⛔ Visual risk colour-bar — punted until ops asks; the text chip is enough for now.
+
+---
+
 ## 5. Phase P-2 — Pricing UX
 
 | Field | Value |

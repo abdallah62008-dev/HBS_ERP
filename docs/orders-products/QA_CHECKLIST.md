@@ -179,11 +179,31 @@
 - [x] **(C-1)** Soft-deleted customer ids passed via `?customer_id=` render an empty prefill — no leak.
 - [x] **(C-1)** Non-numeric / unknown `customer_id` on Orders Index does not crash; filter_customer prop is null.
 - [x] **(C-1)** "View all N →" link appears under the recent-orders panel when total_orders > recent count.
-- [ ] **(C-1 → deferred to C-2)** Stats cards (total / delivered / returned / cancelled / spent / outstanding / COD success / return rate / AOV / last order).
+- [x] **(C-1 → shipped in C-2 2026-05-17)** Stats cards (total / delivered / returned / cancelled / spent / outstanding / COD success / return rate / AOV / last order).
 - [ ] **(C-1 → deferred to C-3)** Customer activity timeline.
 - [ ] **(C-1 → deferred to C-4)** Customer notes table + UX.
 - [ ] **(C-1 → deferred to C-4)** Address book UX (`customer_addresses` table exists but unused).
-- [ ] **(C-1 → deferred to C-5)** Duplicate customer alert / merge workflow.
+- [x] **(C-1 → duplicate ALERT shipped in C-2 2026-05-17; merge still deferred to C-5)** Duplicate customer alert / merge workflow.
+
+---
+
+## 8b. Customer 360 stats + alerts (C-2)
+
+**Shipped 2026-05-17.** Auto-tested by `tests/Feature/Customers/Customer360StatsTest.php` (9 tests).
+
+- [x] **(C-2)** Customer Show renders a 5-column stats-card grid: Total orders / Delivered / Returned / Cancelled / Last order / Total spent / Estimated outstanding / COD success / Return rate / Avg order value.
+- [x] **(C-2)** `total_spent` counts ONLY Delivered orders. Cancelled / Returned / New / etc. do not contribute.
+- [x] **(C-2)** `average_order_value` = `total_spent / delivered_orders`. Null when delivered = 0.
+- [x] **(C-2)** `cod_success_rate` = (`Collected + Settlement Received`) / (`cod_amount > 0`). Null when no COD orders.
+- [x] **(C-2)** `return_rate` = `Returned / (Delivered + Returned)`. Null when both zero.
+- [x] **(C-2)** `outstanding_balance` is labeled "Estimated outstanding" in the UI — math is sum of `cod_amount` on open-collection orders; refined when O-5 lands.
+- [x] **(C-2)** Customer with no orders renders all-zero stats; null ratios; no NaN / division-by-zero.
+- [x] **(C-2)** Duplicate-customer alert renders when another non-deleted customer shares `normalized_phone`. Excludes self. Capped at 5 rows. Each row links to the other customer.
+- [x] **(C-2)** Risk panel shows one-line operational recommendation under the score (Low / Medium / High). Order flow is NEVER blocked by the recommendation — it's pure guidance copy.
+- [ ] **(C-2 → deferred to C-3)** Customer activity timeline.
+- [ ] **(C-2 → deferred to C-4)** Customer notes + Address book UX.
+- [ ] **(C-2 → deferred to C-5)** Duplicate customer **merge** workflow (alert is shipped; the actual merge action is C-5).
+- [ ] **(C-2 → deferred to O-5)** `outstanding_balance` exactness — accurate splits require the multi-payment model from O-5.
 
 ---
 

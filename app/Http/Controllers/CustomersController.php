@@ -142,18 +142,174 @@ class CustomersController extends Controller
             ->latest('id')
             ->value('id');
 
+        // C-2: 360 stats + duplicate-customer detection. Computed in the
+        // controller via aggregate queries; no service layer needed.
+        // `riskBreakdown` is computed once and re-used so we don't pay
+        // for the same risk math twice when both `risk_breakdown` and
+        // `risk_recommendation` need it.
+        $riskBreakdown = $this->riskService->calculate($customer);
+        $stats = $this->customerStats($customer);
+        $duplicateCustomers = $this->duplicateCustomers($customer);
+
         return Inertia::render('Customers/Show', [
             'customer' => $customer,
-            'risk_breakdown' => $this->riskService->calculate($customer),
+            'risk_breakdown' => $riskBreakdown,
 
             // C-1 quick-action props. Keep the surface tiny — each prop
             // has a single job and a clear data source.
             'latest_order_id' => $latestOrderId,
-            'total_orders' => (int) $customer->orders()->count(),
+            'total_orders' => $stats['total_orders'],
             'whatsapp_url' => $customer->whatsappUrl(),
             'can_create_order' => (bool) $user?->hasPermission('orders.create'),
             'can_view_orders' => (bool) $user?->hasPermission('orders.view'),
+
+            // C-2: stats + duplicate alert + risk recommendation.
+            'stats' => $stats,
+            'duplicate_customers' => $duplicateCustomers,
+            'risk_recommendation' => $this->riskRecommendation($riskBreakdown['level'] ?? 'Low'),
         ]);
+    }
+
+    /**
+     * C-2: aggregate stats for the Customer 360 cards.
+     *
+     * One indexed query (customer_id) using SUM-CASE expressions —
+     * mirrors the cheap pattern used by CustomerRiskService::calculate().
+     * No PHP-side iteration, no `customer->orders` materialisation.
+     *
+     * Field meanings — pinned here because they show up in tests + UI:
+     *
+     * - `total_spent`         — Delivered orders only. Cancelled and
+     *                           Returned orders are excluded; otherwise
+     *                           the operator would see misleading
+     *                           revenue.
+     * - `outstanding_balance` — Estimated. Sums `cod_amount` on orders
+     *                           whose collection is still open. The
+     *                           pre-O-5 single-COD model can't reflect
+     *                           multi-payment splits, so the UI labels
+     *                           this card as "Estimated outstanding".
+     * - `cod_success_rate`    — `Collected + Settlement Received` rows
+     *                           over total `cod_amount > 0` rows. Null
+     *                           when no COD orders.
+     * - `return_rate`         — Returned / (Delivered + Returned).
+     *                           Both outcomes count toward the
+     *                           denominator so an only-Returned customer
+     *                           shows 100% (not undefined). Null when
+     *                           both are zero.
+     * - `average_order_value` — total_spent / delivered_orders. Null
+     *                           when delivered = 0.
+     *
+     * @return array<string,mixed>
+     */
+    private function customerStats(\App\Models\Customer $customer): array
+    {
+        $row = \App\Models\Order::query()
+            ->where('customer_id', $customer->id)
+            ->selectRaw("
+                COUNT(*) AS total_orders,
+                SUM(CASE WHEN status = 'Delivered' THEN 1 ELSE 0 END) AS delivered_orders,
+                SUM(CASE WHEN status = 'Returned' THEN 1 ELSE 0 END) AS returned_orders,
+                SUM(CASE WHEN status = 'Cancelled' THEN 1 ELSE 0 END) AS cancelled_orders,
+                SUM(CASE WHEN status = 'Delivered' THEN total_amount ELSE 0 END) AS total_spent,
+                SUM(
+                    CASE
+                        WHEN cod_amount > 0
+                         AND collection_status IN ('Not Collected','Partially Collected','Pending Settlement','Rejected')
+                        THEN cod_amount
+                        ELSE 0
+                    END
+                ) AS outstanding_balance,
+                SUM(CASE WHEN cod_amount > 0 THEN 1 ELSE 0 END) AS cod_orders,
+                SUM(
+                    CASE
+                        WHEN cod_amount > 0
+                         AND collection_status IN ('Collected','Settlement Received')
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS cod_collected_orders,
+                MAX(created_at) AS last_order_at
+            ")
+            ->first();
+
+        $total = (int) ($row->total_orders ?? 0);
+        $delivered = (int) ($row->delivered_orders ?? 0);
+        $returned = (int) ($row->returned_orders ?? 0);
+        $cancelled = (int) ($row->cancelled_orders ?? 0);
+        $totalSpent = (float) ($row->total_spent ?? 0);
+        $outstanding = (float) ($row->outstanding_balance ?? 0);
+        $codOrders = (int) ($row->cod_orders ?? 0);
+        $codCollected = (int) ($row->cod_collected_orders ?? 0);
+
+        $aov = $delivered > 0 ? round($totalSpent / $delivered, 2) : null;
+        $codSuccessRate = $codOrders > 0 ? round(($codCollected / $codOrders) * 100, 1) : null;
+        $returnDenominator = $delivered + $returned;
+        $returnRate = $returnDenominator > 0 ? round(($returned / $returnDenominator) * 100, 1) : null;
+
+        return [
+            'total_orders' => $total,
+            'delivered_orders' => $delivered,
+            'returned_orders' => $returned,
+            'cancelled_orders' => $cancelled,
+            'total_spent' => round($totalSpent, 2),
+            // Labeled "Estimated outstanding" in the UI — the math is a
+            // best-effort approximation pre-O-5. Numeric type stays
+            // consistent for the React tabular-nums formatter.
+            'outstanding_balance' => round($outstanding, 2),
+            'cod_orders' => $codOrders,
+            'cod_collected_orders' => $codCollected,
+            'cod_success_rate' => $codSuccessRate,
+            'return_rate' => $returnRate,
+            'average_order_value' => $aov,
+            'last_order_at' => $row->last_order_at,
+        ];
+    }
+
+    /**
+     * C-2: read-only duplicate-customer detector.
+     *
+     * Uses the O-2 indexed `normalized_phone` column. Excludes the
+     * current customer and soft-deleted rows. No merge, no auto-action
+     * — the UI surfaces a banner; merge is Phase C-5.
+     *
+     * @return array<int, array{id:int, name:string, primary_phone:string}>
+     */
+    private function duplicateCustomers(\App\Models\Customer $customer): array
+    {
+        // Only meaningful when the current customer has a normalized
+        // phone. Pre-O-2 customers with NULL normalized_phone are
+        // skipped — backfill is the right path before duplicate review.
+        if (! $customer->normalized_phone) {
+            return [];
+        }
+
+        return \App\Models\Customer::query()
+            ->where('normalized_phone', $customer->normalized_phone)
+            ->where('id', '!=', $customer->id)
+            ->whereNull('deleted_at')
+            ->limit(5) // sane cap — operator clicks through to inspect
+            ->get(['id', 'name', 'primary_phone'])
+            ->map(fn ($c) => [
+                'id' => (int) $c->id,
+                'name' => $c->name,
+                'primary_phone' => $c->primary_phone,
+            ])
+            ->all();
+    }
+
+    /**
+     * C-2: operational copy derived from the risk level.
+     *
+     * Pure mapping — no policy change. The order flow remains unblocked
+     * for every level; this is a guidance string for the operator.
+     */
+    private function riskRecommendation(string $level): string
+    {
+        return match ($level) {
+            'High' => 'Confirm carefully before shipping or COD.',
+            'Medium' => 'Review recent history before shipping.',
+            default => 'Normal order flow.',
+        };
     }
 
     public function edit(Customer $customer): Response
