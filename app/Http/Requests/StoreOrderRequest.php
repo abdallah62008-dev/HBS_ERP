@@ -63,6 +63,13 @@ class StoreOrderRequest extends FormRequest
 
             // Override duplicate warning — required if duplicate score is high.
             'duplicate_acknowledged' => ['nullable', 'boolean'],
+
+            // O-1: post-save redirect intent. Controller-side only — never
+            // mutates the order itself. Allowed values match the buttons
+            // rendered by Orders/Create.jsx. `save_draft` is intentionally
+            // NOT in the list: Draft status would require an enum
+            // migration which is out of scope for O-1.
+            'submit_action' => ['nullable', 'string', 'in:save,save_add_new,save_duplicate,save_print_label'],
         ];
     }
 }

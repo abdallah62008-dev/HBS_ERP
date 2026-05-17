@@ -8,7 +8,18 @@ import useUnsavedChangesWarning from '@/Hooks/useUnsavedChangesWarning';
 import { Head, Link, useForm, usePage, router } from '@inertiajs/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-export default function OrderCreate({ products, categories = [], locations = [], default_country_code = 'EG', entry_code_preview = null, marketers = [], can_view_profit = false }) {
+export default function OrderCreate({
+    products,
+    categories = [],
+    locations = [],
+    default_country_code = 'EG',
+    entry_code_preview = null,
+    marketers = [],
+    can_view_profit = false,
+    // O-1: action gates + optional duplicate prefill.
+    can_print_label = false,
+    duplicate_from = null,
+}) {
     const { props } = usePage();
     const sym = props.app?.currency_symbol ?? '';
     const can = useCan();
@@ -31,6 +42,27 @@ export default function OrderCreate({ products, categories = [], locations = [],
        on every search/category change (debounced 250 ms). */
     const [searchedProducts, setSearchedProducts] = useState(products);
     const [searchLoading, setSearchLoading] = useState(false);
+
+    /* O-1: rolling cache of every product the user has *seen* (initial
+       seed + every search result + every scanned hit). Order item rows
+       look up product metadata (stock, min selling, name, sku, tax) from
+       this map instead of the static `products` prop, so a product added
+       from a search beyond the initial 25 still has accurate per-line
+       warnings (low stock, below-min selling, tax preview). */
+    const [productCache, setProductCache] = useState(() => {
+        const map = new Map();
+        for (const p of products ?? []) map.set(Number(p.id), p);
+        return map;
+    });
+    const mergeProductsIntoCache = (list) => {
+        if (!Array.isArray(list) || list.length === 0) return;
+        setProductCache((prev) => {
+            const next = new Map(prev);
+            for (const p of list) next.set(Number(p.id), p);
+            return next;
+        });
+    };
+    const lookupProduct = (productId) => productCache.get(Number(productId)) || null;
 
     const defaultCountryName = (locations.find((c) => c.code === default_country_code)?.name_en) ?? 'Egypt';
 
@@ -61,6 +93,9 @@ export default function OrderCreate({ products, categories = [], locations = [],
         extra_fees: 0,
         items: [],
         duplicate_acknowledged: false,
+        // O-1: post-save redirect intent. Set by the Save button group;
+        // backend treats anything outside the allow-list as `save`.
+        submit_action: 'save',
     });
 
     // Warn before leaving the page if there are unsaved edits.
@@ -235,11 +270,57 @@ export default function OrderCreate({ products, categories = [], locations = [],
             scanInputRef.current?.focus();
             return;
         }
+        // O-1: cache the scanned product so warnings resolve later.
+        mergeProductsIntoCache([match]);
         addProductToItems(match);
         setScanFeedback({ tone: 'success', text: `Added: ${match.name} (${match.sku})` });
         setScanInput('');
         scanInputRef.current?.focus();
     };
+
+    /* ──────────────────── O-1: duplicate prefill ──────────────────── */
+    // When the user lands here via `?duplicate_from=<id>`, hydrate the
+    // form ONCE on mount with the source order's customer + items.
+    // Anything financial (totals, profit, marketer wallet, audit) stays
+    // re-computed at save time by OrderService::createFromPayload.
+    useEffect(() => {
+        if (!duplicate_from) return;
+        // Use a functional setter to avoid clobbering any other field a
+        // future effect might set on first render.
+        setData((prev) => ({
+            ...prev,
+            customer_id: duplicate_from.customer_id ?? null,
+            customer_address: duplicate_from.customer_address ?? prev.customer_address,
+            city: duplicate_from.city ?? prev.city,
+            governorate: duplicate_from.governorate ?? prev.governorate,
+            country: duplicate_from.country ?? prev.country,
+            marketer_id: duplicate_from.marketer_id ?? null,
+            source: duplicate_from.source ?? prev.source,
+            shipping_amount: duplicate_from.shipping_amount ?? prev.shipping_amount,
+            items: Array.isArray(duplicate_from.items)
+                ? duplicate_from.items.map((it) => ({
+                    product_id: it.product_id,
+                    product_variant_id: it.product_variant_id ?? null,
+                    quantity: it.quantity,
+                    unit_price: it.unit_price,
+                    discount_amount: it.discount_amount ?? 0,
+                }))
+                : prev.items,
+        }));
+        // The source order's customer card needs `matchedCustomer` for
+        // the green "existing customer" panel to render. The backend
+        // ships a slim summary in `duplicate_from.customer` so we don't
+        // need a separate fetch.
+        if (duplicate_from.customer) {
+            setMatchedCustomer(duplicate_from.customer);
+        }
+        // The duplicate banner from the parent customer's prior order
+        // SHOULD fire — it tells the user "you just placed this exact
+        // order" — but we don't auto-acknowledge it. The user reviews
+        // and clicks through. Items + customer were intentionally
+        // duplicated so the warning is meaningful.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     /**
      * Performance Phase 1 — debounced server-side product search.
@@ -270,7 +351,13 @@ export default function OrderCreate({ products, categories = [], locations = [],
             })
                 .then((r) => (r.ok ? r.json() : Promise.reject(new Error('search failed'))))
                 .then((j) => {
-                    setSearchedProducts(Array.isArray(j.products) ? j.products : []);
+                    const list = Array.isArray(j.products) ? j.products : [];
+                    setSearchedProducts(list);
+                    // O-1: feed every fetched product into the cache so
+                    // per-line warnings (stock, below-min) still resolve
+                    // when the user adds a product, then narrows the
+                    // search to something else.
+                    mergeProductsIntoCache(list);
                 })
                 .catch((err) => {
                     if (err?.name !== 'AbortError') {
@@ -296,7 +383,9 @@ export default function OrderCreate({ products, categories = [], locations = [],
         let subtotal = 0;
         let tax = 0;
         for (const it of data.items) {
-            const product = products.find((p) => Number(p.id) === Number(it.product_id));
+            // O-1: lookup via productCache so totals stay accurate even
+            // for products added beyond the initial 25-product seed.
+            const product = lookupProduct(it.product_id);
             const lineGross = (Number(it.unit_price) * Number(it.quantity)) - Number(it.discount_amount || 0);
             const lineSubtotal = Math.max(0, lineGross);
             subtotal += lineSubtotal;
@@ -317,7 +406,103 @@ export default function OrderCreate({ products, categories = [], locations = [],
             total: total.toFixed(2),
             hasTax: tax > 0,
         };
-    }, [data.items, products, data.shipping_amount, data.extra_fees, data.discount_amount]);
+    }, [data.items, productCache, data.shipping_amount, data.extra_fees, data.discount_amount]);
+
+    /* ──────────────────── O-1: pre-submit warnings ────────────────────
+       Non-blocking. Computed from data already shipped to the page
+       (or already fetched from the marketer profit preview when a
+       marketer is attached). Server-side ProfitGuardService keeps its
+       independent block on below-min sales; this is operator visibility,
+       not a security gate. */
+    const LOW_MARGIN_THRESHOLD = 10; // percent — UI-only heuristic
+    const warnings = useMemo(() => {
+        const list = [];
+        if (data.items.length === 0) return list;
+
+        // Map profit-preview lines by line-index so we can pair stock
+        // warnings with margin warnings for the same row. The preview
+        // is keyed by line order, not product_id, because the same
+        // product can appear twice with different prices.
+        const previewLines = marketerProfit?.lines ?? [];
+
+        data.items.forEach((it, idx) => {
+            const p = lookupProduct(it.product_id);
+            const label = p?.name ? `${p.name}` : `Item #${idx + 1}`;
+            const qty = Number(it.quantity || 0);
+            const price = Number(it.unit_price || 0);
+
+            // 1) Low stock
+            if (p && Number.isFinite(Number(p.available)) && qty > Number(p.available)) {
+                list.push({
+                    kind: 'low_stock',
+                    tone: 'amber',
+                    line: idx,
+                    label,
+                    message: `Only ${p.available} unit${p.available === 1 ? '' : 's'} available — over-selling by ${qty - Number(p.available)}.`,
+                });
+            }
+
+            // 2) Below minimum selling price
+            const minPrice = Number(p?.minimum_selling_price ?? 0);
+            if (p && minPrice > 0 && price < minPrice) {
+                list.push({
+                    kind: 'below_min',
+                    tone: 'red',
+                    line: idx,
+                    label,
+                    message: `Price ${price.toFixed(2)} is below minimum ${minPrice.toFixed(2)} — server will block unless an override is approved.`,
+                });
+            }
+
+            // 3) Marketer-preview-derived warnings (only when the
+            //    preview is loaded — cost is otherwise not on the
+            //    client by design).
+            if (previewLines[idx]) {
+                const pl = previewLines[idx];
+                if (!Number.isFinite(pl.cost_price) || pl.cost_price <= 0) {
+                    list.push({
+                        kind: 'missing_cost',
+                        tone: 'amber',
+                        line: idx,
+                        label,
+                        message: 'Product cost is missing — profit preview may be inaccurate.',
+                    });
+                } else if (Number.isFinite(pl.profit) && pl.profit < 0) {
+                    list.push({
+                        kind: 'negative_profit',
+                        tone: 'red',
+                        line: idx,
+                        label,
+                        message: `Marketer profit is negative (${pl.profit.toFixed(2)}).`,
+                    });
+                } else if (Number.isFinite(pl.profit) && pl.unit_price > 0 && qty > 0) {
+                    const revenue = pl.unit_price * qty;
+                    const marginPct = revenue > 0 ? (pl.profit / revenue) * 100 : 0;
+                    if (revenue > 0 && marginPct < LOW_MARGIN_THRESHOLD) {
+                        list.push({
+                            kind: 'low_margin',
+                            tone: 'amber',
+                            line: idx,
+                            label,
+                            message: `Margin is ${marginPct.toFixed(1)}% — below the ${LOW_MARGIN_THRESHOLD}% target.`,
+                        });
+                    }
+                }
+            }
+        });
+
+        return list;
+    }, [data.items, productCache, marketerProfit]);
+
+    // Quick per-line warning lookup for inline badges in the items table.
+    const warningsByLine = useMemo(() => {
+        const map = new Map();
+        for (const w of warnings) {
+            if (!map.has(w.line)) map.set(w.line, []);
+            map.get(w.line).push(w);
+        }
+        return map;
+    }, [warnings]);
 
     /* Submit gate: require a customer (existing or inline name+phone) AND at least one item. */
     const customerReady = data.customer_id
@@ -363,6 +548,23 @@ export default function OrderCreate({ products, categories = [], locations = [],
         <AuthenticatedLayout header="New order">
             <Head title="New order" />
             <PageHeader title="New order" subtitle="Capture customer, items, and totals" />
+
+            {/* O-1: duplicate-source banner. Only renders when the user
+                landed via `?duplicate_from=<id>` and the source order was
+                resolvable. Non-blocking — pure context. */}
+            {duplicate_from && (
+                <div className="mb-3 rounded-md border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm text-indigo-800">
+                    <div className="flex items-center justify-between gap-2">
+                        <div>
+                            <span className="font-semibold">Duplicating from</span>{' '}
+                            <Link href={route('orders.show', duplicate_from.source_order_id)} className="font-mono text-xs text-indigo-700 hover:underline">
+                                {duplicate_from.source_order_number}
+                            </Link>{' '}
+                            <span className="text-[12px]">— customer, items, and shipping have been pre-filled. Adjust before saving.</span>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <form onSubmit={submit} className="space-y-5">
                 {/* Customer panel */}
@@ -773,9 +975,13 @@ export default function OrderCreate({ products, categories = [], locations = [],
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
                                     {data.items.map((it, idx) => {
-                                        const p = products.find((x) => Number(x.id) === Number(it.product_id));
+                                        const p = lookupProduct(it.product_id);
                                         const lineTotal = (Number(it.unit_price) * Number(it.quantity)) - Number(it.discount_amount || 0);
                                         const overReserved = p && Number(it.quantity) > Number(p.available);
+                                        // O-1: per-line warnings collected from the warnings panel.
+                                        const lineWarnings = warningsByLine.get(idx) ?? [];
+                                        const minPrice = Number(p?.minimum_selling_price ?? 0);
+                                        const isBelowMin = minPrice > 0 && Number(it.unit_price) < minPrice;
                                         return (
                                             <tr key={idx} className="hover:bg-slate-50">
                                                 <td className="px-3 py-1.5 text-slate-700">{p?.name ?? '—'}</td>
@@ -799,8 +1005,12 @@ export default function OrderCreate({ products, categories = [], locations = [],
                                                         min={0}
                                                         value={it.unit_price}
                                                         onChange={(e) => updateItem(idx, 'unit_price', e.target.value)}
-                                                        className="w-20 rounded-md border-slate-300 text-right text-xs tabular-nums"
+                                                        className={'w-20 rounded-md text-right text-xs tabular-nums ' + (isBelowMin ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-300')}
+                                                        title={isBelowMin ? `Below minimum (${minPrice.toFixed(2)})` : ''}
                                                     />
+                                                    {isBelowMin && (
+                                                        <div className="mt-0.5 text-[10px] text-red-600">min {minPrice.toFixed(2)}</div>
+                                                    )}
                                                 </td>
                                                 <td className="px-3 py-1.5 text-right">
                                                     <input
@@ -921,7 +1131,31 @@ export default function OrderCreate({ products, categories = [], locations = [],
                     </div>
                 )}
 
-                <div className="flex flex-wrap items-center justify-end gap-3">
+                {/* O-1: Pre-submit warnings panel. Non-blocking — informs
+                    the operator of issues the server might not flag. */}
+                {warnings.length > 0 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm" role="status">
+                        <div className="flex items-center justify-between gap-2">
+                            <div className="font-semibold text-amber-900">
+                                Heads up — {warnings.length} warning{warnings.length === 1 ? '' : 's'}
+                            </div>
+                            <span className="text-[11px] text-amber-700">Save is still enabled. Review before submitting.</span>
+                        </div>
+                        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-[12px] text-amber-900">
+                            {warnings.map((w, i) => (
+                                <li key={i} className={w.tone === 'red' ? 'text-red-700' : 'text-amber-900'}>
+                                    <span className="font-medium">{w.label}:</span> {w.message}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+
+                {/* O-1: Save action group. Primary "Save" plus secondary
+                    variants that change only the post-save redirect.
+                    Buttons set `submit_action` then submit the form, so
+                    a single backend code path handles all of them. */}
+                <div className="flex flex-wrap items-center justify-end gap-2">
                     {!canSubmit && !processing && (
                         <span className="text-xs text-slate-500">
                             {!customerReady && !itemsReady && 'Add a customer and at least one item to continue.'}
@@ -930,9 +1164,42 @@ export default function OrderCreate({ products, categories = [], locations = [],
                         </span>
                     )}
                     <Link href={route('orders.index')} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">Cancel</Link>
+
+                    {/* Secondary saves — always visible when canSubmit; greyed otherwise. */}
                     <button
                         type="submit"
                         disabled={!canSubmit}
+                        onClick={() => setData('submit_action', 'save_add_new')}
+                        title="Create this order then open a fresh blank form"
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Save &amp; Add New
+                    </button>
+                    <button
+                        type="submit"
+                        disabled={!canSubmit}
+                        onClick={() => setData('submit_action', 'save_duplicate')}
+                        title="Create this order then start another pre-filled from it"
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Save &amp; Duplicate
+                    </button>
+                    {can_print_label && (
+                        <button
+                            type="submit"
+                            disabled={!canSubmit}
+                            onClick={() => setData('submit_action', 'save_print_label')}
+                            title="Create this order then jump straight to the shipping label"
+                            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Save &amp; Print Label
+                        </button>
+                    )}
+
+                    <button
+                        type="submit"
+                        disabled={!canSubmit}
+                        onClick={() => setData('submit_action', 'save')}
                         title={!canSubmit ? 'Complete customer + add items first' : ''}
                         className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -942,7 +1209,7 @@ export default function OrderCreate({ products, categories = [], locations = [],
                                 <path d="M22 12a10 10 0 0 1-10 10" strokeLinecap="round" />
                             </svg>
                         )}
-                        <span>{processing ? 'Saving…' : 'Create order'}</span>
+                        <span>{processing ? 'Saving…' : 'Save order'}</span>
                     </button>
                 </div>
             </form>

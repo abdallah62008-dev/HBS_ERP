@@ -98,18 +98,30 @@
 | Risk | Low–Medium (touches the most-used screen) |
 | Depends on | Phase 0 |
 | Effort | 4–6 dev-days |
-| Status | Should |
+| Status | **Shipped 2026-05-17** (Draft variant deferred) |
 
-### Scope
-- 5 save variants (Save / Save & Add New / Save & Duplicate / Save & Print Label / Save as Draft) per [ORDER_LIFECYCLE_AND_CREATE_UX.md §4](./ORDER_LIFECYCLE_AND_CREATE_UX.md).
-- Pre-submit warnings (below-min selling, missing cost, negative marketer profit, missing phone, unusual quantity).
-- `orders.is_draft` boolean + Draft filter on order index.
-- 8 new permission slugs from [GOVERNANCE_PERMISSIONS_AND_APPROVALS.md §3](./GOVERNANCE_PERMISSIONS_AND_APPROVALS.md) (subset that O-1 needs).
-- "Save as Draft" skips stock reservation; transitioning Draft → New runs the normal reservation logic.
+### Shipped
+- 4 of 5 save variants:
+  - **Save** → Order Show (existing).
+  - **Save & Add New** → fresh `orders.create`.
+  - **Save & Duplicate** → `orders.create?duplicate_from={id}` with customer + items + non-financial fields pre-filled by the controller; cost/profit fields deliberately omitted from the prefill.
+  - **Save & Print Label** → `shipping-labels.print` if user has `shipping.print_label`; falls back to Order Show otherwise with a flash hint.
+- `submit_action` field validated by `StoreOrderRequest`. Allowed values: `save`, `save_add_new`, `save_duplicate`, `save_print_label`. Default `save`. Unknown values 422.
+- Per-line below-min red border + inline `min X` hint.
+- Pre-submit warnings panel (non-blocking) — low stock, below-min selling price, negative marketer profit, missing cost (marketer attached), low margin < 10% (marketer attached).
+- Rolling `productCache` so warnings work for products added beyond the initial 25-product seed.
+- Duplicate-source banner with a back-link to the source order.
+- 16 feature tests in `tests/Feature/Orders/OrderCreateSaveActionsTest.php`. Full regression: 454 / 454 pass.
+
+### Deferred from plan
+- **Save as Draft.** Adds `Draft` to the `orders.status` enum → requires a migration; also requires `OrderService::createFromPayload` to branch on whether to reserve stock, run marketer-wallet accrual, run duplicate detection, hide from the default index, plus enable a `Draft → New` promote action. Out of scope for a UX phase.
+- **`orders.is_draft` boolean column + Draft filter** — same dependency.
+- **8 new permission slugs.** None added in O-1. The "Save & Print Label" button uses the existing `shipping.print_label` slug.
+- **Per-line "Reason for price override" textarea** + `orders.override_price` slug. Awaits Phase 8 approval workflow.
+- **Missing-phone / unusual-quantity warnings.** Phone normalization lands in O-2; unusual-quantity heuristic deferred until a defensible threshold exists.
 
 ### Migrations
-- `add_is_draft_to_orders` (boolean, default false).
-- Permission slug seeds.
+- **None.** O-1 ships zero migrations.
 
 ### Why second
 - Doesn't depend on schema changes outside `orders`; the warnings consume data that's already available.

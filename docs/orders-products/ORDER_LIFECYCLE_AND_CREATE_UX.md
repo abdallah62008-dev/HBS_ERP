@@ -1,6 +1,29 @@
 # Order Lifecycle & Create UX
 
-> Status: **DESIGN ONLY.**
+> Status: **O-1 shipped 2026-05-17.** Draft order remains design-only.
+
+## 0. O-1 shipped scope (2026-05-17)
+
+- ✅ `submit_action` field on Order Create form. Allowed values: `save`, `save_add_new`, `save_duplicate`, `save_print_label`. Defaults to `save` if absent. Validated by `StoreOrderRequest`.
+- ✅ Backend redirect map in `OrdersController::store` → `postSaveRedirect()`:
+  - `save` → `orders.show`.
+  - `save_add_new` → `orders.create`.
+  - `save_duplicate` → `orders.create?duplicate_from={new_order_id}`.
+  - `save_print_label` → `shipping-labels.print` if user has `shipping.print_label`; falls back to `orders.show` otherwise (no 403, no lost order).
+- ✅ Order Create page renders 4 save buttons (primary "Save order" + 3 secondary). "Save & Print Label" hidden when the user lacks the slug.
+- ✅ `?duplicate_from={id}` prefill payload on the Create page — customer summary, items (product_id, qty, unit_price, discount), city/governorate/country, marketer_id, source, shipping_amount. Cost/profit fields are deliberately omitted from the prefill (safe for users without `orders.view_profit`).
+- ✅ Duplicate-source banner at the top of the Create form linking back to the source order.
+- ✅ Ownership: `authorizeOwnership()` is applied to the duplicate source; a marketer cannot snoop on another marketer's order via `?duplicate_from`.
+- ✅ Pre-submit non-blocking warnings panel:
+  - **Low stock** (`qty > available`) — uses the `productCache` so it works for products added beyond the initial 25-product seed.
+  - **Below minimum selling price** (`unit_price < minimum_selling_price`) — red border + inline "min X" hint on the price input + entry in the aggregate panel.
+  - **Negative marketer profit** — when the marketer profit preview is loaded and per-line `profit < 0`.
+  - **Missing cost** — when the marketer profit preview is loaded and per-line `cost_price <= 0`.
+  - **Low margin** — when the marketer profit preview is loaded and per-line margin < 10% (UI-only heuristic threshold).
+- ✅ Existing server-side `ProfitGuardService` is **unchanged**. The new warnings are operator visibility; the server still blocks below-min sales unless an override is approved (per Phase 8 design).
+- ⛔ **Deferred:** `Save as Draft`. Adding it would require an `orders.status` enum migration (currently New, Pending Confirmation, …, Need Review — no Draft). Plus branching in `OrderService::createFromPayload` (skip stock reservation + marketer wallet + duplicate detection). Out of scope for a UX phase.
+- ⛔ **Deferred:** Per-line "Reason for price override" textarea. Depends on the `orders.override_price` permission slug (not yet seeded — design-only in §11) and the Phase 8 approval workflow.
+- ⛔ **Deferred:** Missing-cost / low-margin warnings for orders **without** a marketer attached. The product search response intentionally strips `cost_price` per the safe-fields contract (commit ea3e6e5). Changing that contract is out of scope for O-1; the marketer profit preview path is used instead.
 
 ---
 

@@ -129,6 +129,80 @@ class OrdersController extends Controller
         $user = $request->user();
         $canViewProfit = (bool) $user?->hasPermission('orders.view_profit');
 
+        // O-1: optional "Save & Duplicate" prefill. The previous Save call
+        // redirected here with `?duplicate_from=<id>`; load a slim copy of
+        // that order's customer + items so the form can hydrate without
+        // re-fetching. Authorize through the same ownership gate that
+        // protects Order Show so a marketer can't snoop on another
+        // marketer's orders via the prefill route. Cost/profit fields are
+        // never included in the prefill payload.
+        $duplicateFrom = null;
+        $sourceOrderId = (int) $request->query('duplicate_from', 0);
+        if ($sourceOrderId > 0) {
+            $source = Order::query()
+                ->with([
+                    'items:id,order_id,product_id,product_variant_id,quantity,unit_price,discount_amount',
+                    // O-1: pull a slim customer summary so Create.jsx can
+                    // render the "existing customer" green card without a
+                    // follow-up `/customers/lookup` round-trip. Fields are
+                    // the same shape the lookupByPhone endpoint returns.
+                    'customer:id,name,primary_phone,secondary_phone,email,city,governorate,country,default_address,customer_type,risk_level,primary_phone_whatsapp',
+                ])
+                ->find($sourceOrderId);
+            if ($source) {
+                // Re-use existing ownership check — marketers can only
+                // duplicate their own orders. authorizeOwnership aborts
+                // 403; trap and silently skip the prefill so the page
+                // still renders.
+                try {
+                    $this->authorizeOwnership($source);
+                    $duplicateFrom = [
+                        'source_order_id' => (int) $source->id,
+                        'source_order_number' => $source->order_number,
+                        'customer_id' => $source->customer_id,
+                        // Slim customer object — matches what Create.jsx's
+                        // matchedCustomer state expects so the existing
+                        // green "existing customer" panel renders without
+                        // an extra round-trip.
+                        'customer' => $source->customer ? [
+                            'id' => $source->customer->id,
+                            'name' => $source->customer->name,
+                            'primary_phone' => $source->customer->primary_phone,
+                            'secondary_phone' => $source->customer->secondary_phone,
+                            'email' => $source->customer->email,
+                            'city' => $source->customer->city,
+                            'governorate' => $source->customer->governorate,
+                            'country' => $source->customer->country,
+                            'default_address' => $source->customer->default_address,
+                            'customer_type' => $source->customer->customer_type ?? null,
+                            'risk_level' => $source->customer->risk_level ?? null,
+                            'primary_phone_whatsapp' => (bool) ($source->customer->primary_phone_whatsapp ?? true),
+                        ] : null,
+                        'customer_address' => $source->customer_address,
+                        'city' => $source->city,
+                        'governorate' => $source->governorate,
+                        'country' => $source->country,
+                        'marketer_id' => $source->marketer_id,
+                        'source' => $source->source,
+                        'shipping_amount' => (float) $source->shipping_amount,
+                        // Snapshot items minus their financial provenance.
+                        // The new order is a fresh creation — we only seed
+                        // product_id + qty + unit_price + discount.
+                        'items' => $source->items->map(fn ($it) => [
+                            'product_id' => (int) $it->product_id,
+                            'product_variant_id' => $it->product_variant_id ? (int) $it->product_variant_id : null,
+                            'quantity' => (int) $it->quantity,
+                            'unit_price' => (float) $it->unit_price,
+                            'discount_amount' => (float) $it->discount_amount,
+                        ])->all(),
+                    ];
+                } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
+                    // Don't bubble — just render the create page empty.
+                    $duplicateFrom = null;
+                }
+            }
+        }
+
         return Inertia::render('Orders/Create', [
             // Performance Phase 1: do NOT ship the full active product
             // catalogue. The page now calls `orders.products.search`
@@ -174,6 +248,14 @@ class OrdersController extends Controller
             // block on Create.jsx renders only when this is true; the
             // backing preview endpoint is also gated by the same slug.
             'can_view_profit' => $canViewProfit,
+
+            // O-1: Save action variant gates + optional duplicate prefill.
+            //  - `can_print_label` shows/hides the "Save & Print Label"
+            //    button. Server enforces the same permission on redirect.
+            //  - `duplicate_from` is null in the common case; populated
+            //    only when the user landed via `?duplicate_from=<id>`.
+            'can_print_label' => (bool) $user?->hasPermission('shipping.print_label'),
+            'duplicate_from' => $duplicateFrom,
         ]);
     }
 
@@ -324,13 +406,66 @@ class OrdersController extends Controller
     public function store(StoreOrderRequest $request): RedirectResponse
     {
         $payload = $request->validated();
+        // O-1: `submit_action` controls only the post-save redirect.
+        // It must not leak into OrderService::createFromPayload, which
+        // would treat it as an order column.
+        $submitAction = $payload['submit_action'] ?? 'save';
+        unset($payload['submit_action']);
         $payload['created_by'] = Auth::id();
 
         $order = $this->orderService->createFromPayload($payload);
 
-        return redirect()
-            ->route('orders.show', $order)
-            ->with('success', "Order {$order->order_number} created.");
+        return $this->postSaveRedirect($order, $submitAction, $request->user());
+    }
+
+    /**
+     * Resolve the post-save redirect for the Order Create page (O-1).
+     *
+     * The order is ALREADY created at this point — `submit_action` only
+     * decides where the operator lands next. Order data is never
+     * mutated by this method.
+     *
+     *  - `save`              → Order Show (existing behaviour).
+     *  - `save_add_new`      → fresh Order Create.
+     *  - `save_duplicate`    → Order Create with `?duplicate_from={id}`.
+     *  - `save_print_label`  → shipping label print page if the user
+     *                          has `shipping.print_label`; otherwise
+     *                          fall back to Order Show with a note.
+     */
+    private function postSaveRedirect(Order $order, string $action, ?\App\Models\User $user): RedirectResponse
+    {
+        $created = "Order {$order->order_number} created.";
+
+        switch ($action) {
+            case 'save_add_new':
+                return redirect()
+                    ->route('orders.create')
+                    ->with('success', $created . ' Ready for the next one.');
+
+            case 'save_duplicate':
+                return redirect()
+                    ->route('orders.create', ['duplicate_from' => $order->id])
+                    ->with('success', $created . ' Pre-filled for duplication.');
+
+            case 'save_print_label':
+                if ($user?->hasPermission('shipping.print_label')) {
+                    return redirect()
+                        ->route('shipping-labels.print', $order)
+                        ->with('success', $created);
+                }
+                // Fall through to Order Show with a hint so the operator
+                // can ask an authorised user to print. Don't 403 — the
+                // order itself was created successfully.
+                return redirect()
+                    ->route('orders.show', $order)
+                    ->with('success', $created . ' (Label printing requires shipping.print_label permission.)');
+
+            case 'save':
+            default:
+                return redirect()
+                    ->route('orders.show', $order)
+                    ->with('success', $created);
+        }
     }
 
     public function show(Order $order): Response

@@ -104,11 +104,14 @@
 ## 7. Order create
 
 ### Save variants (O-1)
-- [ ] **(O-1)** "Save" submits + redirects to Order Show.
-- [ ] **(O-1)** "Save & Add New" submits + reloads Order Create with an empty form.
-- [ ] **(O-1)** "Save & Duplicate" submits + reloads Order Create with the same customer + line items pre-filled.
-- [ ] **(O-1)** "Save & Print Label" submits + opens the shipping label PDF in a new tab.
-- [ ] **(O-1)** "Save as Draft" submits with `is_draft = true`, no stock reservation, no inventory movement, redirects to Order Show with a "Draft" badge.
+
+**Shipped 2026-05-17** — backend redirects auto-tested by `tests/Feature/Orders/OrderCreateSaveActionsTest.php`. Re-run UX checks below by hand at release time.
+
+- [x] **(O-1)** "Save order" submits + redirects to Order Show (default behaviour preserved).
+- [x] **(O-1)** "Save & Add New" submits + redirects to a fresh `/orders/create` with success flash.
+- [x] **(O-1)** "Save & Duplicate" submits + redirects to `/orders/create?duplicate_from={id}`. New page shows the duplicate-source banner, pre-fills the customer + items + shipping + marketer, and re-runs the duplicate-detection banner on the prefilled data.
+- [x] **(O-1)** "Save & Print Label" submits + redirects to `/shipping-labels/{order}/print` when the user has `shipping.print_label`. Without the permission, the button is hidden client-side AND the server-side redirect falls back to Order Show with a flash hint (no 403).
+- [ ] **(O-1 → deferred)** "Save as Draft" — adding `Draft` to the orders status enum is out of scope for O-1. The button is intentionally absent and the `save_draft` value is rejected by the request validator (verified by test).
 
 ### Validation
 - [ ] Submitting without a customer → 422.
@@ -118,11 +121,18 @@
 - [ ] Submitting a line item with `unit_price` below `minimum_selling_price` (with override permission) → ApprovalRequest created; order moves to `Pending Approval` state.
 - [ ] Submitting with a stock shortage on any line item → 422 with the specific item flagged.
 
-### Warnings (don't block)
-- [ ] **(O-1)** Negative marketer profit per line → red highlight + warning banner.
-- [ ] **(O-1)** Unusually high quantity (> 100) → warning banner.
-- [ ] **(O-1)** Customer's previous orders show a recent return → soft warning.
-- [ ] **(O-1)** No `cost_price` on a product line → "Missing cost" warning.
+### Warnings (don't block) — O-1
+
+**Shipped 2026-05-17.** All warnings are non-blocking; submitting is always allowed (server-side `ProfitGuardService` keeps its independent block on below-min sales).
+
+- [x] **(O-1)** Low stock: `qty > available` per line → amber row in the aggregate warnings panel + the existing inline red qty-input hint. Works for products added beyond the initial 25-product seed (productCache).
+- [x] **(O-1)** Below minimum selling price: `unit_price < minimum_selling_price` → red border on the price input, inline `min X` hint under the input, red row in the aggregate warnings panel.
+- [x] **(O-1)** Negative marketer profit per line (when a marketer is attached and the profit preview is loaded) → red row in the warnings panel.
+- [x] **(O-1)** Missing cost (when marketer attached and per-line `cost_price <= 0`) → amber row in the warnings panel.
+- [x] **(O-1)** Low margin: when marketer attached and per-line margin < 10% (UI-only threshold) → amber row in the warnings panel.
+- [ ] **(O-1 → deferred)** Unusually high quantity (> 100) — heuristic threshold deferred until business sign-off.
+- [ ] **(O-1 → deferred)** Customer's previous orders show a recent return — depends on a per-customer return rate lookup not yet exposed to the Create page.
+- [ ] **(O-1 → deferred)** Missing cost / low margin **without** a marketer attached — would require relaxing the safe-fields contract on the product search endpoint (cost_price is intentionally stripped). Use the marketer profit preview path for now.
 
 ### Side effects
 - [ ] Stock reserved (`inventory_movements` row of type Reserve) for each non-draft line.
