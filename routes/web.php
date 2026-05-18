@@ -104,6 +104,15 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::middleware('permission:customers.delete')->delete('/customers/{customer}/notes/{note}', [CustomersController::class, 'destroyNote'])
         ->name('customers.notes.destroy');
 
+    /* ─────────────── Customer duplicate merge preview (C-5A) ───────────────
+     * Read-only side-by-side comparison reached via the C-2 duplicate
+     * alert. Reuses `customers.view` — no new permission slug. C-5B
+     * execute will introduce `customers.merge`. */
+    Route::middleware('permission:customers.view')->get(
+        '/customers/{source}/duplicates/{target}/preview',
+        [CustomersController::class, 'previewDuplicateMerge'],
+    )->name('customers.duplicates.preview');
+
     /* ─────────────── Customer address book (C-4B) ─────────────── */
     // store / update / set-default reuse `customers.edit`; destroy
     // reuses `customers.delete`. Zero new permission slugs.

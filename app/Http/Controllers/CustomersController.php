@@ -478,6 +478,300 @@ class CustomersController extends Controller
             ->with('success', 'Address removed.');
     }
 
+    /* ──────────────────── C-5A: Duplicate Merge Preview ──────────────────── */
+
+    /**
+     * Active-order statuses for the "source has active orders" warning.
+     * Pinned as a class constant so the warning logic and any future
+     * tests reference the same list (avoids drift when the order
+     * lifecycle is extended).
+     */
+    private const PREVIEW_ACTIVE_ORDER_STATUSES = [
+        'Pending Confirmation', 'Confirmed', 'Ready to Pack', 'Packed',
+        'Ready to Ship', 'Shipped', 'Out for Delivery',
+    ];
+
+    /** Return statuses considered open (operator action required). */
+    private const PREVIEW_OPEN_RETURN_STATUSES = ['Pending', 'Received', 'Inspected'];
+
+    /** Refund statuses considered open (workflow not yet terminal). */
+    private const PREVIEW_OPEN_REFUND_STATUSES = ['requested', 'approved'];
+
+    /**
+     * C-5A: render a read-only side-by-side merge preview for two
+     * customers flagged as duplicates by the C-2 alert.
+     *
+     * Pure read path. NEVER writes to any table — verified by the
+     * `preview_does_not_write_anything` test that counts every relevant
+     * table before and after the GET.
+     *
+     * Validation surfaces:
+     *   - source.id !== target.id (422 — "Source and target must differ.")
+     *   - neither row is soft-deleted (the route binding uses the
+     *     default {customer} model which already excludes soft-deleted
+     *     rows; the explicit guard belt-and-braces against future
+     *     changes that switch to `withTrashed()`).
+     *
+     * `merged_into_customer_id` validation is intentionally skipped —
+     * that column doesn't exist yet (C-5B introduces it). When it
+     * lands, extend the guards.
+     */
+    public function previewDuplicateMerge(Customer $source, Customer $target): Response|RedirectResponse
+    {
+        if ((int) $source->id === (int) $target->id) {
+            return redirect()
+                ->route('customers.show', $source)
+                ->with('error', 'Source and target must differ.');
+        }
+        if ($source->trashed() || $target->trashed()) {
+            return redirect()
+                ->route('customers.index')
+                ->with('error', 'One of the customers has been deleted.');
+        }
+
+        $sourceSummary = $this->slimCustomerSummary($source);
+        $targetSummary = $this->slimCustomerSummary($target);
+
+        // Affected-record counts. Each side gets one query per table —
+        // all customer_id columns are indexed so the cost is small. We
+        // use COUNT (not eager-load) to keep the payload tiny.
+        $affectedRecords = [
+            'source' => $this->customerRelatedCounts($source),
+            'target' => $this->customerRelatedCounts($target),
+        ];
+
+        // Conflicts: per-field policy summary. See C-5 review §4 for
+        // the canonical policy table.
+        $conflicts = $this->buildMergeConflicts($source, $target);
+
+        // Recommended-target heuristic: more orders, then older
+        // `created_at` (more history → more authoritative). Falls back
+        // to the URL `target` parameter on a tie.
+        $recommendedTargetId = $this->recommendMergeTarget($source, $target);
+
+        // Warnings — read-only safety flags. Never block in C-5A
+        // because there is no execute action.
+        $warnings = $this->buildMergeWarnings($source, $target);
+
+        return Inertia::render('Customers/MergePreview', [
+            'source' => $sourceSummary,
+            'target' => $targetSummary,
+            'affected_records' => $affectedRecords,
+            'conflicts' => $conflicts,
+            'recommended_target_id' => $recommendedTargetId,
+            'warnings' => $warnings,
+            // Swap navigation target.
+            'swap_url' => route('customers.duplicates.preview', [
+                'source' => $target->id, 'target' => $source->id,
+            ]),
+        ]);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function slimCustomerSummary(Customer $c): array
+    {
+        $latestOrderDate = \App\Models\Order::query()
+            ->where('customer_id', $c->id)
+            ->max('created_at');
+
+        return [
+            'id' => (int) $c->id,
+            'name' => $c->name,
+            'primary_phone' => $c->primary_phone,
+            'secondary_phone' => $c->secondary_phone,
+            'normalized_phone' => $c->normalized_phone,
+            'email' => $c->email,
+            'country' => $c->country,
+            'governorate' => $c->governorate,
+            'city' => $c->city,
+            'default_address' => $c->default_address,
+            'customer_type' => $c->customer_type,
+            'risk_level' => $c->risk_level,
+            'risk_score' => (int) $c->risk_score,
+            'primary_phone_whatsapp' => (bool) ($c->primary_phone_whatsapp ?? true),
+            'created_at' => optional($c->created_at)->toIso8601String(),
+            'orders_count' => (int) $c->orders()->count(),
+            'latest_order_date' => $latestOrderDate
+                ? \Illuminate\Support\Carbon::parse($latestOrderDate)->toIso8601String()
+                : null,
+        ];
+    }
+
+    /**
+     * @return array<string,int>
+     */
+    private function customerRelatedCounts(Customer $c): array
+    {
+        return [
+            'orders' => (int) \App\Models\Order::where('customer_id', $c->id)->count(),
+            'returns' => (int) \App\Models\OrderReturn::where('customer_id', $c->id)->count(),
+            'refunds' => (int) \App\Models\Refund::where('customer_id', $c->id)->count(),
+            'customer_notes' => (int) \App\Models\CustomerNote::where('customer_id', $c->id)->count(),
+            'customer_addresses' => (int) \App\Models\CustomerAddress::where('customer_id', $c->id)->count(),
+            'customer_tags' => (int) \App\Models\CustomerTag::where('customer_id', $c->id)->count(),
+        ];
+    }
+
+    /**
+     * Per-field conflict descriptor for the preview's conflict strip.
+     *
+     * "Conflict" means BOTH sides have a non-null value AND the values
+     * differ. Same-value fields are silent. Null-on-one-side fields are
+     * also silent — the policy is "copy when target's slot is empty",
+     * which the UI explains globally without per-row noise.
+     *
+     * @return array<int, array{field:string, source_value:?string, target_value:?string, policy:string}>
+     */
+    private function buildMergeConflicts(Customer $source, Customer $target): array
+    {
+        $fields = [
+            'name' => 'Keep target name. Source name will be preserved in the merge log (and as a customer note in C-5B).',
+            'primary_phone' => 'Keep target phone. Source phone preserved in merge log.',
+            'normalized_phone' => 'Different normalized phones flagged as HIGH RISK — super-admin confirmation will be required in C-5B.',
+            'secondary_phone' => 'Keep target. If target had none, source value will be copied in C-5B.',
+            'email' => 'Keep target. If target had none, source value will be copied in C-5B.',
+            'country' => 'Keep target.',
+            'governorate' => 'Keep target.',
+            'city' => 'Keep target.',
+            'default_address' => 'Keep target default. Source address moved into target address book in C-5B.',
+            'customer_type' => 'Take the more-restrictive value (Blacklist > Watchlist > VIP > Normal).',
+            'risk_level' => 'Take the higher value (High > Medium > Low). Risk score recomputed from orders post-merge.',
+            'notes' => 'Source legacy notes appended to target as a structured customer_notes row in C-5B.',
+        ];
+
+        $out = [];
+        foreach ($fields as $field => $policy) {
+            $columnOnModel = $field === 'notes' ? 'notes' : $field;
+            $s = $source->{$columnOnModel};
+            $t = $target->{$columnOnModel};
+
+            // Treat null and empty-string as the same "no value".
+            $sEmpty = $s === null || $s === '';
+            $tEmpty = $t === null || $t === '';
+            if ($sEmpty || $tEmpty) continue;
+            if ((string) $s === (string) $t) continue;
+
+            $out[] = [
+                'field' => $field === 'notes' ? 'legacy_notes' : $field,
+                'source_value' => (string) $s,
+                'target_value' => (string) $t,
+                'policy' => $policy,
+            ];
+        }
+        return $out;
+    }
+
+    private function recommendMergeTarget(Customer $source, Customer $target): int
+    {
+        $sourceOrders = (int) $source->orders()->count();
+        $targetOrders = (int) $target->orders()->count();
+        if ($sourceOrders !== $targetOrders) {
+            return $sourceOrders > $targetOrders ? $source->id : $target->id;
+        }
+        // Older customer wins on tiebreak (more history → more
+        // authoritative). When timestamps tie too, the URL target wins.
+        $sourceCreated = $source->created_at?->getTimestamp() ?? PHP_INT_MAX;
+        $targetCreated = $target->created_at?->getTimestamp() ?? PHP_INT_MAX;
+        if ($sourceCreated < $targetCreated) return $source->id;
+        return $target->id;
+    }
+
+    /**
+     * Build the warnings array for the preview. Each warning is a
+     * read-only flag — the page renders them but never blocks. C-5B
+     * will translate the same set into block / require-super-admin
+     * decisions on execute.
+     *
+     * @return array<int, array{type:string, severity:string, message:string}>
+     */
+    private function buildMergeWarnings(Customer $source, Customer $target): array
+    {
+        $warnings = [];
+
+        // 1. Different normalized phones.
+        if ($source->normalized_phone && $target->normalized_phone
+            && $source->normalized_phone !== $target->normalized_phone) {
+            $warnings[] = [
+                'type' => 'cross_phone',
+                'severity' => 'high',
+                'message' => "Source and target have different normalized phones ({$source->normalized_phone} vs {$target->normalized_phone}). C-5B will require super-admin confirmation.",
+            ];
+        }
+
+        // 2. Source has active orders.
+        $activeOrdersCount = \App\Models\Order::query()
+            ->where('customer_id', $source->id)
+            ->whereIn('status', self::PREVIEW_ACTIVE_ORDER_STATUSES)
+            ->count();
+        if ($activeOrdersCount > 0) {
+            $warnings[] = [
+                'type' => 'source_active_orders',
+                'severity' => 'medium',
+                'message' => "Source has {$activeOrdersCount} active order(s) that will be reassigned to target.",
+            ];
+        }
+
+        // 3. Source has unpaid COD / outstanding balance.
+        $outstandingOrders = \App\Models\Order::query()
+            ->where('customer_id', $source->id)
+            ->where('cod_amount', '>', 0)
+            ->whereIn('collection_status', ['Not Collected', 'Partially Collected', 'Pending Settlement', 'Rejected'])
+            ->count();
+        if ($outstandingOrders > 0) {
+            $warnings[] = [
+                'type' => 'source_outstanding_balance',
+                'severity' => 'medium',
+                'message' => "Source has {$outstandingOrders} order(s) with open COD balance. The balance follows the merge.",
+            ];
+        }
+
+        // 4. Source has open returns.
+        $openReturns = \App\Models\OrderReturn::query()
+            ->where('customer_id', $source->id)
+            ->whereIn('return_status', self::PREVIEW_OPEN_RETURN_STATUSES)
+            ->count();
+        if ($openReturns > 0) {
+            $warnings[] = [
+                'type' => 'source_open_returns',
+                'severity' => 'medium',
+                'message' => "Source has {$openReturns} open return(s).",
+            ];
+        }
+
+        // 5. Source has open refunds.
+        $openRefunds = \App\Models\Refund::query()
+            ->where('customer_id', $source->id)
+            ->whereIn('status', self::PREVIEW_OPEN_REFUND_STATUSES)
+            ->count();
+        if ($openRefunds > 0) {
+            $warnings[] = [
+                'type' => 'source_open_refunds',
+                'severity' => 'medium',
+                'message' => "Source has {$openRefunds} open refund request(s).",
+            ];
+        }
+
+        // 6. Target high risk / restricted.
+        if ($target->risk_level === 'High') {
+            $warnings[] = [
+                'type' => 'target_high_risk',
+                'severity' => 'medium',
+                'message' => 'Target customer is flagged HIGH risk. Review before merging.',
+            ];
+        }
+        if (in_array($target->customer_type, ['Blacklist', 'Watchlist'], true)) {
+            $warnings[] = [
+                'type' => 'target_restricted_type',
+                'severity' => 'high',
+                'message' => "Target customer type is {$target->customer_type}.",
+            ];
+        }
+
+        return $warnings;
+    }
+
     /**
      * C-2: aggregate stats for the Customer 360 cards.
      *

@@ -270,6 +270,30 @@
 
 ---
 
+## 8f. Duplicate Merge Preview (C-5A — read-only)
+
+**Shipped 2026-05-17.** Auto-tested by `tests/Feature/Customers/DuplicateMergePreviewTest.php` (11 tests). Zero migrations. Zero writes.
+
+- [x] **(C-5A)** Customer Show duplicate alert renders a "Review →" link per duplicate row, pointing to `/customers/{source}/duplicates/{target}/preview`.
+- [x] **(C-5A)** Preview page renders with side-by-side comparison: profile / phones / address / risk / WhatsApp opt-in / orders count / latest order date for both sides.
+- [x] **(C-5A)** Affected-records box on each side counts orders / returns / refunds / customer_notes / customer_addresses / customer_tags.
+- [x] **(C-5A)** Conflicts strip shows ONLY fields where both sides have differing non-null values. Empty/missing values silenced.
+- [x] **(C-5A)** Recommended survivor heuristic: more orders → wins; tie → older `created_at`; final tie → URL `target` parameter. Highlighted with an emerald border + chip.
+- [x] **(C-5A)** Warnings panel surfaces: different normalized phones (HIGH), source has active orders (MEDIUM), source has outstanding COD (MEDIUM), source has open returns (MEDIUM), source has open refunds (MEDIUM), target high risk (MEDIUM), target Blacklist/Watchlist (HIGH).
+- [x] **(C-5A)** Swap source ↔ target link inverts the URL parameters — preview re-renders without any side effect.
+- [x] **(C-5A)** Source = target → redirect with error message (no preview rendered).
+- [x] **(C-5A)** Soft-deleted source or target → redirect to customers index with error message.
+- [x] **(C-5A)** Permission gate: `customers.view` allows preview; users without it get 403.
+- [x] **(C-5A)** Zero-write verification: counts on `customers`, `orders`, `returns`, `refunds`, `customer_notes`, `customer_addresses`, `customer_tags` are identical before and after the preview GET. Pinned by `preview_does_not_write_anything` test.
+- [x] **(C-5A)** Footer placeholder reads "Merge execution will be available in C-5B" — no execute form rendered, no submit endpoint exists.
+- [ ] **(C-5A → deferred to C-5B)** Actual merge execution — reassignment of orders/returns/refunds/notes/addresses/tags + source-row marking + audit log + timeline event on target.
+- [ ] **(C-5A → deferred to C-5C)** Approval workflow on merges.
+- [ ] **(C-5A → deferred)** Rollback command (depends on C-5B's `customer_merges.payload`).
+- [ ] **(C-5A → deferred until C-5B lands)** Filter `merged_into_customer_id` out of the C-2 duplicate detector.
+- [ ] **(C-5A → deferred until C-5B duplicates are resolved)** Unique constraint on `customers.normalized_phone`.
+
+---
+
 ## 9. Save & Add New (O-1)
 
 - [ ] **(O-1)** Submitting "Save & Add New" preserves: branch, source, marketer (operator option to keep or reset).

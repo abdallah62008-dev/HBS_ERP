@@ -251,11 +251,23 @@ export default function CustomerShow({
                     </div>
                     <ul className="mt-1.5 list-disc pl-5 text-[12px] text-amber-900">
                         {duplicate_customers.map((d) => (
-                            <li key={d.id}>
-                                <Link href={route('customers.show', d.id)} className="font-medium hover:underline">
-                                    {d.name}
-                                </Link>{' '}
-                                <span className="text-amber-700">· {d.primary_phone}</span>
+                            <li key={d.id} className="flex flex-wrap items-baseline gap-2">
+                                <span>
+                                    <Link href={route('customers.show', d.id)} className="font-medium hover:underline">
+                                        {d.name}
+                                    </Link>{' '}
+                                    <span className="text-amber-700">· {d.primary_phone}</span>
+                                </span>
+                                {/* C-5A: read-only merge preview link. The
+                                    current customer is treated as the source
+                                    (most-recently visited) — operators can
+                                    swap on the preview page. */}
+                                <Link
+                                    href={route('customers.duplicates.preview', { source: customer.id, target: d.id })}
+                                    className="text-[11px] font-medium text-amber-800 underline-offset-2 hover:underline"
+                                >
+                                    Review →
+                                </Link>
                             </li>
                         ))}
                     </ul>

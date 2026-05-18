@@ -401,6 +401,59 @@
 
 ---
 
+## 4f. Phase C-5A — Duplicate Merge Preview (read-only)
+
+| Field | Value |
+|---|---|
+| Code | C-5A |
+| Risk | Very Low (zero writes — pure read view) |
+| Depends on | C-2 (duplicate alert) |
+| Effort | 0.5 dev-day |
+| Status | **Shipped 2026-05-17** |
+
+### Shipped
+- New route `GET /customers/{source}/duplicates/{target}/preview` → `customers.duplicates.preview`. Gated by existing `customers.view`. **Zero new permission slugs.**
+- New `CustomersController::previewDuplicateMerge()` method + helpers: `slimCustomerSummary()`, `customerRelatedCounts()`, `buildMergeConflicts()`, `recommendMergeTarget()`, `buildMergeWarnings()`. All read-only.
+- Validation: source ≠ target (redirect with error), neither soft-deleted (redirect with error). `merged_into_customer_id` validation deferred until C-5B introduces the column.
+- New `Pages/Customers/MergePreview.jsx` — read-only side-by-side comparison page. Shows: per-side profile + risk + WhatsApp opt-in + related-records counts (orders / returns / refunds / notes / addresses / tags), conflict strip with per-field policy, warnings panel, recommended-survivor highlight (emerald), swap source↔target link, "Coming in C-5B" footer placeholder.
+- Customer Show duplicate alert gains a per-row "Review →" link to the preview page.
+- Recommended-target heuristic: more orders → wins; tie → older `created_at`; final tie → target route parameter.
+- Warnings emitted (read-only flags):
+  - `cross_phone` (HIGH) — different `normalized_phone` on the two sides.
+  - `source_active_orders` (MEDIUM) — Pending Confirmation / Confirmed / Ready to Pack / Packed / Ready to Ship / Shipped / Out for Delivery.
+  - `source_outstanding_balance` (MEDIUM) — `cod_amount > 0` AND `collection_status IN ('Not Collected','Partially Collected','Pending Settlement','Rejected')`.
+  - `source_open_returns` (MEDIUM) — return_status `Pending` / `Received` / `Inspected`.
+  - `source_open_refunds` (MEDIUM) — refund status `requested` / `approved`.
+  - `target_high_risk` (MEDIUM) — `risk_level = 'High'`.
+  - `target_restricted_type` (HIGH) — `customer_type IN ('Blacklist','Watchlist')`.
+- Tests: 11 in `tests/Feature/Customers/DuplicateMergePreviewTest.php` including a hard zero-write verification that counts every customer-related table before and after the GET and asserts identical row counts. Full regression: **564 / 564**.
+
+### Zero-write guarantee
+- The `preview_does_not_write_anything` test counts rows in `customers`, `orders`, `returns`, `refunds`, `customer_notes`, `customer_addresses`, `customer_tags` before and after the preview GET. Any drift fails the test. This is the contractual gate that protects financial / order data from accidental mutation while C-5B is in design.
+
+### Migrations / permissions
+- **Zero migrations. Zero new permission slugs.**
+
+### Deferred items
+- ⛔ **Merge execution (C-5B)** — actual reassignment of orders/returns/refunds/notes/addresses/tags + source-row marking + `customer_merges` log table. Needs migration + new `customers.merge` permission slug.
+- ⛔ **Approval workflow (C-5C)** — wire into Phase 8 `ApprovalRequest`. Only if ops needs a second pair of eyes.
+- ⛔ **Rollback command** — relies on the `customer_merges.payload` snapshot which C-5B introduces.
+- ⛔ **`merged_into_customer_id` filter on the C-2 duplicate detector** — needs the C-5B column. Until then, an already-merged customer can theoretically still surface as a duplicate (irrelevant pre-C-5B since no rows are marked merged).
+- ⛔ **Unique constraint on `normalized_phone`** — final cleanup step once operators have run merges and resolved existing duplicates. Document as a future migration.
+
+### Exit criteria — verified
+- ✅ Preview page loads.
+- ✅ Source ≠ target enforced.
+- ✅ Affected-record counts cover all 6 related tables.
+- ✅ Conflicts computed only when both sides have differing non-null values.
+- ✅ Warnings include all 7 categories listed above.
+- ✅ Recommended target follows the orders → age heuristic.
+- ✅ Zero writes verified by before/after row counts.
+- ✅ Permission gate uses `customers.view`.
+- ✅ C-2 duplicate alert exposes the Review link.
+
+---
+
 ## 5. Phase P-2 — Pricing UX
 
 | Field | Value |
