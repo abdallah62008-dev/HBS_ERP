@@ -117,6 +117,11 @@ export default function CustomerShow({
     // `can_delete_customer` flag.
     customer_addresses = [],
     can_manage_addresses = false,
+    // C-5B: merge tombstone payload. Non-null only when this customer
+    // was merged INTO another. Renders a banner + suppresses the
+    // quick-action bar so operators don't try to create new orders /
+    // edit a row that's now historical.
+    merge_tombstone = null,
 }) {
     const can = useCan();
     const { props } = usePage();
@@ -184,8 +189,14 @@ export default function CustomerShow({
                         {/* C-1: Quick action bar. Each button is a Link
                             (no POST) so we cannot accidentally create an
                             order. Operator still has to click Save on
-                            the resulting Order Create page. */}
-                        {can_create_order && (
+                            the resulting Order Create page.
+
+                            C-5B: when this customer is a merged tombstone,
+                            the create-order / duplicate / edit / delete
+                            actions are suppressed because the row is
+                            historical. WhatsApp + View Orders stay (they
+                            still reference live data). */}
+                        {can_create_order && !merge_tombstone && (
                             <Link
                                 href={route('orders.create', { customer_id: customer.id })}
                                 className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
@@ -201,7 +212,7 @@ export default function CustomerShow({
                                 View Orders
                             </Link>
                         )}
-                        {can_create_order && latest_order_id && (
+                        {can_create_order && latest_order_id && !merge_tombstone && (
                             <Link
                                 href={route('orders.create', { duplicate_from: latest_order_id })}
                                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
@@ -220,7 +231,7 @@ export default function CustomerShow({
                                 <span aria-hidden="true">🟢</span> WhatsApp
                             </a>
                         )}
-                        {can('customers.edit') && (
+                        {can('customers.edit') && !merge_tombstone && (
                             <Link
                                 href={route('customers.edit', customer.id)}
                                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
@@ -228,7 +239,7 @@ export default function CustomerShow({
                                 Edit
                             </Link>
                         )}
-                        {can('customers.delete') && (
+                        {can('customers.delete') && !merge_tombstone && (
                             <button
                                 type="button"
                                 onClick={handleDelete}
@@ -240,6 +251,29 @@ export default function CustomerShow({
                     </div>
                 }
             />
+
+            {/* C-5B: merge tombstone banner. Renders only when this
+                customer was merged INTO another. Points the operator
+                at the surviving customer; the action bar above already
+                suppresses create/edit/delete on tombstones. */}
+            {merge_tombstone && (
+                <div className="mb-4 rounded-md border border-slate-300 bg-slate-50 p-3 text-sm">
+                    <div className="font-semibold text-slate-800">
+                        This customer was merged into{' '}
+                        <Link
+                            href={route('customers.show', merge_tombstone.merged_into_customer_id)}
+                            className="text-indigo-700 hover:underline"
+                        >
+                            {merge_tombstone.merged_into_customer_name ?? `Customer #${merge_tombstone.merged_into_customer_id}`}
+                        </Link>
+                    </div>
+                    <p className="mt-1 text-[12px] text-slate-600">
+                        {merge_tombstone.merged_at && (<>on <span className="font-mono">{fmtTimelineTimestamp(merge_tombstone.merged_at)}</span></>)}
+                        {merge_tombstone.merged_by_name && (<> by {merge_tombstone.merged_by_name}</>)}
+                        . This page is read-only history. Use the surviving customer for any new actions.
+                    </p>
+                </div>
+            )}
 
             {/* C-2: duplicate-customer alert. Read-only — clicking the
                 link navigates to the other customer's profile. No merge
@@ -501,38 +535,62 @@ export default function CustomerShow({
 
             {/* C-2: Customer 360 stats cards. Compact grid right above the
                 profile + risk panel. Money values use the system currency
-                symbol; rates display percentages; nulls show as "—". */}
+                symbol; rates display percentages; nulls show as "—".
+
+                M4 Must-Fix: when this customer is a merged tombstone,
+                the stats come from the merge log (`from_merge_log` is
+                true). Only the two counts the log preserved (total
+                orders + returned orders) are rendered, with explicit
+                "at time of merge" labels. Cards we can't reconstruct
+                (delivered split / COD math / AOV / outstanding) are
+                hidden rather than rendered as "—" — operators
+                wouldn't know if "—" meant "no data" or "no merge log". */}
             {stats && (
-                <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-                    <StatCard label="Total orders" value={stats.total_orders} />
-                    <StatCard label="Delivered" value={stats.delivered_orders} tone="emerald" />
-                    <StatCard label="Returned" value={stats.returned_orders} tone={stats.returned_orders > 0 ? 'amber' : 'default'} />
-                    <StatCard label="Cancelled" value={stats.cancelled_orders} tone="slate" />
-                    <StatCard label="Last order" value={fmtDate(stats.last_order_at)} />
-                    <StatCard label="Total spent" value={fmtMoney(stats.total_spent, sym)} hint="Delivered orders only" />
-                    <StatCard
-                        label="Estimated outstanding"
-                        value={fmtMoney(stats.outstanding_balance, sym)}
-                        hint="Open COD balances"
-                        tone={stats.outstanding_balance > 0 ? 'amber' : 'default'}
-                    />
-                    <StatCard
-                        label="COD success"
-                        value={fmtPercent(stats.cod_success_rate)}
-                        hint={stats.cod_orders > 0 ? `${stats.cod_collected_orders}/${stats.cod_orders} collected` : 'No COD orders'}
-                    />
-                    <StatCard
-                        label="Return rate"
-                        value={fmtPercent(stats.return_rate)}
-                        hint={stats.return_rate !== null ? 'Returned / (Delivered + Returned)' : null}
-                        tone={stats.return_rate !== null && stats.return_rate >= 20 ? 'amber' : 'default'}
-                    />
-                    <StatCard
-                        label="Avg order value"
-                        value={fmtMoney(stats.average_order_value, sym)}
-                        hint="Delivered avg"
-                    />
-                </div>
+                stats.from_merge_log ? (
+                    <div className="mb-4 rounded-lg border border-slate-300 bg-slate-50 p-3">
+                        <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                            Counts at time of merge ({fmtDate(stats.merge_at)})
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                            <StatCard label="Orders moved" value={stats.total_orders} tone="slate" />
+                            <StatCard label="Returns moved" value={stats.returned_orders} tone="slate" />
+                        </div>
+                        <p className="mt-2 text-[11px] text-slate-500">
+                            Full revenue / AOV / COD breakdowns live on the surviving customer's page.
+                        </p>
+                    </div>
+                ) : (
+                    <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                        <StatCard label="Total orders" value={stats.total_orders} />
+                        <StatCard label="Delivered" value={stats.delivered_orders} tone="emerald" />
+                        <StatCard label="Returned" value={stats.returned_orders} tone={stats.returned_orders > 0 ? 'amber' : 'default'} />
+                        <StatCard label="Cancelled" value={stats.cancelled_orders} tone="slate" />
+                        <StatCard label="Last order" value={fmtDate(stats.last_order_at)} />
+                        <StatCard label="Total spent" value={fmtMoney(stats.total_spent, sym)} hint="Delivered orders only" />
+                        <StatCard
+                            label="Estimated outstanding"
+                            value={fmtMoney(stats.outstanding_balance, sym)}
+                            hint="Open COD balances"
+                            tone={stats.outstanding_balance > 0 ? 'amber' : 'default'}
+                        />
+                        <StatCard
+                            label="COD success"
+                            value={fmtPercent(stats.cod_success_rate)}
+                            hint={stats.cod_orders > 0 ? `${stats.cod_collected_orders}/${stats.cod_orders} collected` : 'No COD orders'}
+                        />
+                        <StatCard
+                            label="Return rate"
+                            value={fmtPercent(stats.return_rate)}
+                            hint={stats.return_rate !== null ? 'Returned / (Delivered + Returned)' : null}
+                            tone={stats.return_rate !== null && stats.return_rate >= 20 ? 'amber' : 'default'}
+                        />
+                        <StatCard
+                            label="Avg order value"
+                            value={fmtMoney(stats.average_order_value, sym)}
+                            hint="Delivered avg"
+                        />
+                    </div>
+                )
             )}
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

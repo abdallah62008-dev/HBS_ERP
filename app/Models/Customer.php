@@ -21,11 +21,14 @@ class Customer extends Model
         'city', 'governorate', 'country', 'default_address',
         'risk_score', 'risk_level', 'customer_type', 'notes',
         'created_by', 'updated_by', 'deleted_by',
+        // C-5B: duplicate-merge tombstone fields.
+        'merged_into_customer_id', 'merged_at', 'merged_by',
     ];
 
     protected $casts = [
         'risk_score' => 'integer',
         'primary_phone_whatsapp' => 'boolean',
+        'merged_at' => 'datetime',
     ];
 
     /**
@@ -55,6 +58,47 @@ class Customer extends Model
     public function orders(): HasMany
     {
         return $this->hasMany(Order::class);
+    }
+
+    /**
+     * C-5B: pointer to the surviving customer when this row was merged
+     * away. Null on every "live" customer.
+     */
+    public function mergedInto(): BelongsTo
+    {
+        return $this->belongsTo(Customer::class, 'merged_into_customer_id');
+    }
+
+    public function mergedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'merged_by');
+    }
+
+    /**
+     * Merges where this customer was the SOURCE (got merged away).
+     * Usually zero or one row.
+     */
+    public function sourceMerges(): HasMany
+    {
+        return $this->hasMany(CustomerMerge::class, 'source_customer_id');
+    }
+
+    /**
+     * Merges where this customer was the TARGET (survivor). Can be
+     * many — a "magnet" customer can absorb several duplicates.
+     */
+    public function targetMerges(): HasMany
+    {
+        return $this->hasMany(CustomerMerge::class, 'target_customer_id');
+    }
+
+    /**
+     * Convenience boolean — true when this customer was merged into
+     * another and is now a tombstone.
+     */
+    public function isMerged(): bool
+    {
+        return $this->merged_into_customer_id !== null;
     }
 
     /**

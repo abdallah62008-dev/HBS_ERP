@@ -454,6 +454,97 @@
 
 ---
 
+## 4g. Phase C-5B — Duplicate Merge Execution
+
+| Field | Value |
+|---|---|
+| Code | C-5B |
+| Risk | **High** (financial / order reference rewiring) — mitigated by transaction + audit + tests |
+| Depends on | C-5A (preview surface) |
+| Effort | 1 dev-day |
+| Status | **Shipped 2026-05-17** |
+
+### Shipped
+- **2 additive migrations:**
+  - `create_customer_merges_table` — `id, source_customer_id, target_customer_id, merged_by, reason, affected_*_count (6 counts), payload (json), created_at` + 3 indexes (source / target / actor).
+  - `add_merged_fields_to_customers` — `merged_into_customer_id (FK nullOnDelete), merged_at, merged_by (FK nullOnDelete)` + index on `merged_into_customer_id`.
+- **1 new permission slug:** `customers.merge`. Granted to Admin (via the "all minus 3" rule) and Super Admin (bypass). Manager intentionally NOT granted — separation of duties on financial / order reference rewiring.
+- New `App\Services\CustomerMergeService` — **single writer** for the entire merge transaction. Locks both customer rows (`lockForUpdate` with sorted ids to prevent deadlock), re-checks invariants under the lock, then reassigns + tombstones + audits.
+- Reassignment scope:
+  - `orders.customer_id` → target (snapshot columns NEVER touched).
+  - `returns.customer_id` → target.
+  - `refunds.customer_id` → target.
+  - `customer_notes.customer_id` → target.
+  - `customer_addresses.customer_id` → target. Source defaults flattened if target already has a default. Single-default invariant re-enforced after the move.
+  - `customer_tags` → **union** behaviour. Source rows that duplicate a target tag string are deleted; non-overlapping rows are reassigned.
+- Source row marked `merged_into_customer_id` / `merged_at` / `merged_by`. **NOT soft-deleted** — stays visible as a read-only tombstone.
+- Target risk score recomputed via `CustomerRiskService::calculate()` after reassignment.
+- `customer_merges` row persisted with affected counts + a `payload` JSON containing the source profile snapshot and the lists of affected ids per table (foundation for a future rollback command).
+- 2 audit_logs rows: `customers.merged_out` on source + `customers.merged_in` on target. Both reference the `customer_merges.id`.
+- C-2 duplicate detector now filters `merged_into_customer_id IS NULL` so a merged-out source never resurfaces as a duplicate of new arrivals.
+- C-3 timeline emits `customer_merged_in` on the target and `customer_merged_out` on the source.
+- New endpoint `POST /customers/{source}/duplicates/{target}/merge` → `customers.duplicates.merge`, gated by `customers.merge`. Requires `reason` (min 10 chars) + `confirmation = 'MERGE'` (typed exactly).
+- `Pages/Customers/MergePreview.jsx` gains an execute form (renders only when the operator has `customers.merge`). Cross-phone merges show a blocking message for non-super-admin operators (the form stays disabled).
+- `Pages/Customers/Show.jsx` renders a tombstone banner when the customer is a merged source, and suppresses the create-order / duplicate / edit / delete actions (the row is historical).
+- Tests: **16 in `CustomerMergeExecutionTest`**. Full regression: **580 / 580**.
+
+### Snapshot-column contract (pinned)
+The service **never** writes to `orders.customer_name`, `orders.customer_phone`, `orders.customer_phone_secondary`, `orders.customer_phone_whatsapp`, `orders.customer_phone_normalized`, `orders.customer_address`, `orders.city`, `orders.governorate`, `orders.country`. These are the historical record at order-create time. Pinned by the `merge_does_not_touch_order_snapshot_columns` test.
+
+### Cross-phone merge policy
+A merge between customers with different `normalized_phone` values is allowed but escalates to **Super Admin** only. Server-side enforced inside `CustomerMergeService::preflight()` (RuntimeException → 422). UI surfaces the block reason in the preview's execute form.
+
+### Migrations / permissions
+- **2 additive migrations.**
+- **1 new permission slug** (`customers.merge`). Re-run `php artisan db:seed --class=PermissionsSeeder` and `php artisan db:seed --class=RolesSeeder` on deploy.
+
+### Deferred items
+- ⛔ **Approval workflow** — Phase 8 `ApprovalRequest` integration. Reserved for **C-5C** when ops needs a second pair of eyes.
+- ⛔ **Rollback command** — `php artisan customers:rollback-merge {merge_id}`. The `customer_merges.payload` carries everything needed; the command itself can land in a follow-up.
+- ⛔ **Unique constraint on `customers.normalized_phone`** — final cleanup once operators have used C-5B to resolve existing duplicates. Document as a future migration.
+- ⛔ **Cascading merge re-targeting** — if A was merged into B, and a new operator picks A as source for a new merge, the service rejects (already merged). A future enhancement could auto-resolve A → final survivor. Out of scope for C-5B.
+
+### Exit criteria — verified
+- ✅ Reassignment moves orders / returns / refunds / notes / addresses / tags to target.
+- ✅ Snapshot columns on orders preserved.
+- ✅ Tag union de-dups overlapping strings.
+- ✅ Single-default invariant on target addresses preserved.
+- ✅ Source marked `merged_into_customer_id` (NOT soft-deleted).
+- ✅ `customer_merges` row + audit logs on both sides.
+- ✅ Already-merged source rejected.
+- ✅ Empty / short reason rejected.
+- ✅ Wrong confirmation phrase rejected.
+- ✅ Permission gate uses new `customers.merge` slug.
+- ✅ Cross-phone merge requires super-admin.
+- ✅ C-2 duplicate detector excludes already-merged rows.
+- ✅ C-3 timeline emits merge events on both sides.
+- ✅ Source Show renders tombstone banner; create/edit/delete actions suppressed.
+
+### C-5B Must-Fix follow-up (M1–M6) — shipped 2026-05-17
+
+The architecture review surfaced six high-/medium-severity items beyond the original C-5B happy path. All shipped as a single follow-up batch.
+
+| ID | Fix |
+|---|---|
+| **M1** | Block writes on merged sources. New `CustomersController::blockIfMerged()` helper short-circuits store/destroy on `customer_notes`, `customer_addresses` (store/update/setDefault/destroy), the customer `update` route, the Order Create `?customer_id=` prefill, AND the Order Store payload. Every block also writes a `write_blocked_merged_source` audit log row. |
+| **M2** | Synthetic `App\Events\CustomerRecordsReassigned` event dispatched after the merge transaction commits. Carries source/target ids, merge id, affected-id lists per table, actor id. Listeners hook here instead of relying on Eloquent `updated` events (which mass `update()` skips). No subscribers today — the event is the canonical hook for future modules (marketer wallet recompute, search index sync, n8n webhooks, cache invalidation). |
+| **M3a** | Feature flag `customer_merge_enabled` (boolean, default false) enforced at three layers: controller preflight, service preflight, frontend banner. Service throws `RuntimeException('Customer merge workflow is disabled.')` if execution is attempted with the flag off. Preview page renders an info banner explaining the disabled state. |
+| **M3b** | Field-merge policies on target now actually run: secondary phone/email copied when target empty; `customer_type` promoted to more-restrictive (Blacklist > Watchlist > VIP > Normal); `risk_level` promoted to higher (High > Medium > Low); source legacy `customers.notes` text converted to a structured `customer_notes` row on target tagged "Imported from merged customer #X". Pre-merge target profile + the applied patch land in `payload.target_profile_pre_merge` + `payload.target_patch_applied` for future rollback. |
+| **M4** | Tombstone stats pivot — when `customer.merged_into_customer_id` is non-null, `CustomersController::show()` sources stats from the latest `customer_merges` row (`affected_*_count`) instead of live queries. New `from_merge_log` flag on the prop; UI swaps the panel for a "Counts at time of merge" block showing only the reliable fields. |
+| **M5** | Wrong-direction guard. Server-side check in `executeMerge`: when `recommended_target_id !== target.id`, `wrong_direction_ack` is required. UI surfaces a prominent amber warning + an acknowledgement checkbox above the Execute button when the operator is on the wrong side of the recommendation. |
+| **M6** | Every rejection path writes an `audit_logs` row with `action = merge_rejected` and a `reason_code` (one of `feature_flag_off`, `wrong_confirmation`, `wrong_direction_unacknowledged`, `source_equals_target`, `soft_deleted`, `already_merged_source`, `already_merged_target`, `short_reason`, `cross_phone_non_super_admin`, `unknown`). Detects probing + recurring operator confusion. |
+
+### Must-fix testing
+- 25 additional tests in `tests/Feature/Customers/CustomerMergeMustFixTest.php` cover M1–M6 across all surfaces.
+- Pre-existing `CustomerMergeExecutionTest` was patched to enable the feature flag in `setUp()` and bake `wrong_direction_ack` into the shared payload helper.
+- Full regression: **605 / 605** (was 580 before must-fix work; +25 new tests, 0 regressions).
+
+### Deployment additions
+- New step required: `php artisan tinker --execute="App\Services\SettingsService::set('customer_merge_enabled', true, 'customers', 'boolean');"` to enable the workflow. Defaults to OFF — workflow ships dark.
+- Operators can flip the flag without redeploy by setting `customer_merge_enabled` via the settings UI (or the artisan one-liner above).
+
+---
+
 ## 5. Phase P-2 — Pricing UX
 
 | Field | Value |

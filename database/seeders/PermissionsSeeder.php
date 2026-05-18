@@ -53,6 +53,11 @@ class PermissionsSeeder extends Seeder
                 'customers.edit' => 'Edit customer',
                 'customers.delete' => 'Delete customer',
                 'customers.view_risk' => 'View customer risk score',
+                // C-5B: execute a duplicate merge. Admin / Super Admin only.
+                // Preview (C-5A) reuses `customers.view`; execute is its own
+                // slug because the action rewires order / return / refund /
+                // note / address references across customer rows.
+                'customers.merge' => 'Execute duplicate customer merge',
             ],
             'products' => [
                 'products.view' => 'View products',

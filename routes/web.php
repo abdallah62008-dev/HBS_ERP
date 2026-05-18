@@ -107,11 +107,20 @@ Route::middleware(['auth', 'active'])->group(function () {
     /* ─────────────── Customer duplicate merge preview (C-5A) ───────────────
      * Read-only side-by-side comparison reached via the C-2 duplicate
      * alert. Reuses `customers.view` — no new permission slug. C-5B
-     * execute will introduce `customers.merge`. */
+     * execute introduces `customers.merge`. */
     Route::middleware('permission:customers.view')->get(
         '/customers/{source}/duplicates/{target}/preview',
         [CustomersController::class, 'previewDuplicateMerge'],
     )->name('customers.duplicates.preview');
+
+    /* ─────────────── Customer duplicate merge execute (C-5B) ───────────────
+     * Executes the merge. Gated by the new `customers.merge` slug.
+     * Admin / Super Admin only (Manager intentionally excluded —
+     * separation of duties on financial / order reference rewiring). */
+    Route::middleware('permission:customers.merge')->post(
+        '/customers/{source}/duplicates/{target}/merge',
+        [CustomersController::class, 'executeMerge'],
+    )->name('customers.duplicates.merge');
 
     /* ─────────────── Customer address book (C-4B) ─────────────── */
     // store / update / set-default reuse `customers.edit`; destroy

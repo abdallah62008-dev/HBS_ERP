@@ -148,7 +148,18 @@ class CustomersController extends Controller
         // for the same risk math twice when both `risk_breakdown` and
         // `risk_recommendation` need it.
         $riskBreakdown = $this->riskService->calculate($customer);
-        $stats = $this->customerStats($customer);
+
+        // M4 Must-Fix: when this customer is a merged tombstone, the
+        // stats query would return all zeros (records were reassigned
+        // away). Pivot to the merge-time snapshot from the latest
+        // `customer_merges` row so operators see the historical scale
+        // of the merged record, not a misleading 0/0/0.
+        if ($customer->merged_into_customer_id) {
+            $stats = $this->customerStatsFromMergeLog($customer);
+        } else {
+            $stats = $this->customerStats($customer);
+        }
+
         $duplicateCustomers = $this->duplicateCustomers($customer);
 
         // C-3: read-only customer activity timeline. Merges events from
@@ -232,6 +243,16 @@ class CustomersController extends Controller
             // already uses.
             'customer_addresses' => $customerAddresses,
             'can_manage_addresses' => (bool) $user?->hasPermission('customers.edit'),
+
+            // C-5B: merge tombstone payload. Non-null only when this
+            // customer was merged INTO another. The Show page renders
+            // a banner pointing operators to the surviving customer.
+            'merge_tombstone' => $customer->merged_into_customer_id ? [
+                'merged_into_customer_id' => (int) $customer->merged_into_customer_id,
+                'merged_into_customer_name' => optional($customer->mergedInto)->name,
+                'merged_at' => optional($customer->merged_at)->toIso8601String(),
+                'merged_by_name' => optional($customer->mergedBy)->name,
+            ] : null,
         ]);
     }
 
@@ -244,6 +265,9 @@ class CustomersController extends Controller
      */
     public function storeNote(Request $request, Customer $customer): RedirectResponse
     {
+        // M1: block note creation on merged tombstones.
+        if ($redirect = $this->blockIfMerged($customer)) return $redirect;
+
         $data = $request->validate([
             'note' => ['required', 'string', 'max:5000'],
             'is_internal' => ['nullable', 'boolean'],
@@ -274,6 +298,9 @@ class CustomersController extends Controller
      */
     public function destroyNote(Customer $customer, \App\Models\CustomerNote $note): RedirectResponse
     {
+        // M1: block note deletion on merged tombstones.
+        if ($redirect = $this->blockIfMerged($customer)) return $redirect;
+
         if ((int) $note->customer_id !== (int) $customer->id) {
             abort(404);
         }
@@ -341,6 +368,9 @@ class CustomersController extends Controller
 
     public function storeAddress(Request $request, Customer $customer): RedirectResponse
     {
+        // M1: block address creation on merged tombstones.
+        if ($redirect = $this->blockIfMerged($customer)) return $redirect;
+
         $data = $this->validateAddressPayload($request);
         $explicitDefault = (bool) ($data['is_default'] ?? false);
 
@@ -379,6 +409,9 @@ class CustomersController extends Controller
 
     public function updateAddress(Request $request, Customer $customer, \App\Models\CustomerAddress $address): RedirectResponse
     {
+        // M1: block address edits on merged tombstones.
+        if ($redirect = $this->blockIfMerged($customer)) return $redirect;
+
         if ((int) $address->customer_id !== (int) $customer->id) {
             abort(404);
         }
@@ -420,6 +453,9 @@ class CustomersController extends Controller
 
     public function setDefaultAddress(Customer $customer, \App\Models\CustomerAddress $address): RedirectResponse
     {
+        // M1: block default changes on merged tombstones.
+        if ($redirect = $this->blockIfMerged($customer)) return $redirect;
+
         if ((int) $address->customer_id !== (int) $customer->id) {
             abort(404);
         }
@@ -444,6 +480,9 @@ class CustomersController extends Controller
 
     public function destroyAddress(Customer $customer, \App\Models\CustomerAddress $address): RedirectResponse
     {
+        // M1: block address removal on merged tombstones.
+        if ($redirect = $this->blockIfMerged($customer)) return $redirect;
+
         if ((int) $address->customer_id !== (int) $customer->id) {
             abort(404);
         }
@@ -476,6 +515,42 @@ class CustomersController extends Controller
         return redirect()
             ->route('customers.show', $customer)
             ->with('success', 'Address removed.');
+    }
+
+    /* ──────────────────── C-5B Must-Fix: merge guards ──────────────────── */
+
+    /**
+     * M1: Reject mutating actions on a customer that was merged away.
+     *
+     * A merged-away customer is a tombstone — the surviving customer
+     * is the canonical record. New notes / addresses / orders against
+     * the tombstone would silently drift from audit reality.
+     *
+     * Returns a redirect when the caller is on a merged customer;
+     * null otherwise. Caller pattern:
+     *
+     *     if ($redirect = $this->blockIfMerged($customer)) return $redirect;
+     */
+    private function blockIfMerged(Customer $customer): ?RedirectResponse
+    {
+        if (! $customer->merged_into_customer_id) {
+            return null;
+        }
+        $target = $customer->merged_into_customer_id;
+        AuditLogService::log(
+            action: 'write_blocked_merged_source',
+            module: 'customers',
+            recordType: Customer::class,
+            recordId: $customer->id,
+            newValues: [
+                'merged_into_customer_id' => $target,
+                'attempted_url' => request()->fullUrl(),
+                'method' => request()->method(),
+            ],
+        );
+        return redirect()
+            ->route('customers.show', $target)
+            ->with('error', "Customer #{$customer->id} was merged into Customer #{$target}. Continue on the surviving customer.");
     }
 
     /* ──────────────────── C-5A: Duplicate Merge Preview ──────────────────── */
@@ -516,7 +591,7 @@ class CustomersController extends Controller
      * that column doesn't exist yet (C-5B introduces it). When it
      * lands, extend the guards.
      */
-    public function previewDuplicateMerge(Customer $source, Customer $target): Response|RedirectResponse
+    public function previewDuplicateMerge(Customer $source, Customer $target, Request $request): Response|RedirectResponse
     {
         if ((int) $source->id === (int) $target->id) {
             return redirect()
@@ -527,6 +602,13 @@ class CustomersController extends Controller
             return redirect()
                 ->route('customers.index')
                 ->with('error', 'One of the customers has been deleted.');
+        }
+        // C-5B: redirect away from previews that target an already-
+        // merged customer (the source row would just be a tombstone).
+        if ($source->merged_into_customer_id || $target->merged_into_customer_id) {
+            return redirect()
+                ->route('customers.show', $target->merged_into_customer_id ? $target->merged_into_customer_id : $target)
+                ->with('error', 'One of the customers has already been merged.');
         }
 
         $sourceSummary = $this->slimCustomerSummary($source);
@@ -553,6 +635,33 @@ class CustomersController extends Controller
         // because there is no execute action.
         $warnings = $this->buildMergeWarnings($source, $target);
 
+        // C-5B: surface the merge gate so the page can render the
+        // execute form. Cross-phone merges escalate to super-admin
+        // only — flagged separately so the UI can disable the form
+        // for non-super-admin operators.
+        //
+        // M3a Must-Fix: the feature flag is the master switch — when
+        // off, the page renders an information banner and the execute
+        // form stays out of reach. Default false ships the workflow
+        // dark; ops enables via SettingsService.
+        $user = $request->user();
+        $featureEnabled = (bool) \App\Services\SettingsService::get('customer_merge_enabled', false);
+        $canMerge = (bool) $user?->hasPermission('customers.merge');
+        $isSuperAdmin = (bool) $user?->isSuperAdmin();
+        $crossPhone = $source->normalized_phone && $target->normalized_phone
+            && $source->normalized_phone !== $target->normalized_phone;
+        $wrongDirection = $recommendedTargetId !== $target->id;
+        $canExecute = $featureEnabled && $canMerge && (! $crossPhone || $isSuperAdmin);
+
+        // M3a + M5: assemble a single "blocked reason" string so the
+        // UI doesn't have to know about the priority order.
+        $blockedReason = null;
+        if (! $featureEnabled) {
+            $blockedReason = 'Customer merge workflow is currently disabled.';
+        } elseif ($canMerge && $crossPhone && ! $isSuperAdmin) {
+            $blockedReason = 'Cross-phone merge requires super-admin.';
+        }
+
         return Inertia::render('Customers/MergePreview', [
             'source' => $sourceSummary,
             'target' => $targetSummary,
@@ -564,7 +673,159 @@ class CustomersController extends Controller
             'swap_url' => route('customers.duplicates.preview', [
                 'source' => $target->id, 'target' => $source->id,
             ]),
+            // C-5B execute gate.
+            'can_merge' => $canMerge,
+            'can_execute_merge' => $canExecute,
+            'merge_blocked_reason' => $blockedReason,
+            'feature_enabled' => $featureEnabled,
+            // M5 Must-Fix: surface wrong-direction state so the UI
+            // can render the amber warning + an explicit acknowledge
+            // checkbox above the Execute button.
+            'wrong_direction' => $wrongDirection,
+            'execute_url' => route('customers.duplicates.merge', [
+                'source' => $source->id, 'target' => $target->id,
+            ]),
         ]);
+    }
+
+    /**
+     * C-5B: execute a duplicate merge.
+     *
+     * Permission `customers.merge` is enforced at the route layer.
+     * This method validates input + delegates the entire reassignment
+     * + audit-log + tombstone-marking to {@see CustomerMergeService}.
+     *
+     * Any service-side validation failure throws RuntimeException and
+     * we surface it as a redirect-back with error. The transaction is
+     * inside the service — partial states never escape.
+     *
+     * Post-merge: redirect to the target customer with a success flash
+     * summarising the affected counts.
+     */
+    public function executeMerge(
+        Request $request,
+        Customer $source,
+        Customer $target,
+        \App\Services\CustomerMergeService $service,
+    ): RedirectResponse {
+        $user = $request->user();
+
+        // M3a + M6 Must-Fix: enforce the feature flag at the
+        // controller layer (the service repeats the check). Reject
+        // attempts even reach the validator when the flag is off.
+        if (! (bool) \App\Services\SettingsService::get('customer_merge_enabled', false)) {
+            $this->auditMergeRejection($user, $source, $target, 'feature_flag_off');
+            return back()->withErrors([
+                'reason' => 'Customer merge workflow is currently disabled.',
+            ])->withInput();
+        }
+
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:10', 'max:1000'],
+            'confirmation' => ['required', 'string'],
+            // M5 Must-Fix: explicit acknowledgement when the operator
+            // is merging away from the recommended survivor. Default
+            // false; UI sets to "1" via the checkbox.
+            'wrong_direction_ack' => ['nullable', 'string'],
+        ]);
+
+        if ($data['confirmation'] !== 'MERGE') {
+            $this->auditMergeRejection($user, $source, $target, 'wrong_confirmation');
+            return back()->withErrors([
+                'confirmation' => 'Type MERGE exactly to confirm.',
+            ])->withInput();
+        }
+
+        // M5 Must-Fix: if the recommended survivor is the source
+        // (i.e. operator is merging the wrong direction), require
+        // explicit acknowledgement.
+        $recommendedTargetId = $this->recommendMergeTarget($source, $target);
+        if ($recommendedTargetId !== $target->id
+            && empty($data['wrong_direction_ack'])) {
+            $this->auditMergeRejection($user, $source, $target, 'wrong_direction_unacknowledged');
+            return back()->withErrors([
+                'wrong_direction_ack' => "The recommended survivor is Customer #{$recommendedTargetId}, not #{$target->id}. Tick the acknowledgement box or swap source↔target before proceeding.",
+            ])->withInput();
+        }
+
+        try {
+            $merge = $service->merge($source, $target, [
+                'reason' => $data['reason'],
+                'actor_id' => $user?->id,
+                'actor_is_super_admin' => (bool) $user?->isSuperAdmin(),
+            ]);
+        } catch (\RuntimeException $e) {
+            // M6 Must-Fix: audit every rejection from the service.
+            $reasonCode = $this->classifyMergeException($e);
+            $this->auditMergeRejection($user, $source, $target, $reasonCode, $e->getMessage());
+            return back()->withErrors([
+                'reason' => $e->getMessage(),
+            ])->withInput();
+        }
+
+        $summary = sprintf(
+            'Merged customer #%d into #%d. Reassigned %d order(s), %d return(s), %d refund(s), %d note(s), %d address(es), %d tag(s).',
+            $source->id, $target->id,
+            $merge->affected_orders_count,
+            $merge->affected_returns_count,
+            $merge->affected_refunds_count,
+            $merge->affected_notes_count,
+            $merge->affected_addresses_count,
+            $merge->affected_tags_count,
+        );
+
+        return redirect()
+            ->route('customers.show', $target)
+            ->with('success', $summary);
+    }
+
+    /**
+     * M6 Must-Fix: write an audit_log row for a rejected merge
+     * attempt. Code is one of: `feature_flag_off`,
+     * `wrong_confirmation`, `wrong_direction_unacknowledged`,
+     * `source_equals_target`, `soft_deleted`, `already_merged_source`,
+     * `already_merged_target`, `short_reason`, `cross_phone_non_super_admin`,
+     * `unknown`. Allows audit dashboards to detect probing or
+     * recurring operator confusion.
+     */
+    private function auditMergeRejection(
+        ?\App\Models\User $user,
+        Customer $source,
+        Customer $target,
+        string $reasonCode,
+        ?string $detail = null,
+    ): void {
+        AuditLogService::log(
+            action: 'merge_rejected',
+            module: 'customers',
+            recordType: Customer::class,
+            recordId: $source->id,
+            newValues: [
+                'source_customer_id' => $source->id,
+                'target_customer_id' => $target->id,
+                'actor_id' => $user?->id,
+                'reason_code' => $reasonCode,
+                'detail' => $detail,
+            ],
+        );
+    }
+
+    /**
+     * Map a `CustomerMergeService` RuntimeException message into one of
+     * the reason codes for the audit log. Pattern-matches the string
+     * the service throws — keep in sync.
+     */
+    private function classifyMergeException(\RuntimeException $e): string
+    {
+        $msg = $e->getMessage();
+        if (str_contains($msg, 'must differ')) return 'source_equals_target';
+        if (str_contains($msg, 'soft-deleted')) return 'soft_deleted';
+        if (str_contains($msg, 'Source customer has already')) return 'already_merged_source';
+        if (str_contains($msg, 'Target customer has already')) return 'already_merged_target';
+        if (str_contains($msg, 'reason must be at least')) return 'short_reason';
+        if (str_contains($msg, 'requires super-admin')) return 'cross_phone_non_super_admin';
+        if (str_contains($msg, 'workflow is disabled')) return 'feature_flag_off';
+        return 'unknown';
     }
 
     /**
@@ -868,6 +1129,48 @@ class CustomersController extends Controller
     }
 
     /**
+     * M4 Must-Fix: build the C-2 stats payload for a merged tombstone
+     * from the latest `customer_merges` row instead of live queries.
+     *
+     * Live queries on a merged source return 0/0/0 because every
+     * related record was reassigned to the surviving customer — which
+     * is correct but misleading on the operator-facing page. The
+     * merge log preserved the at-time-of-merge counts; we expose them
+     * with an explicit `from_merge_log` flag the UI can use to swap
+     * card titles to "Orders at time of merge" and hide cards we
+     * can't reconstruct (delivered/returned split, COD math, AOV).
+     *
+     * @return array<string,mixed>
+     */
+    private function customerStatsFromMergeLog(Customer $customer): array
+    {
+        /** @var ?\App\Models\CustomerMerge $merge */
+        $merge = $customer->sourceMerges()->latest('id')->first();
+        if (! $merge) {
+            // Tombstone without a log row — shouldn't happen, but fall
+            // back to live stats so the page still renders.
+            return $this->customerStats($customer);
+        }
+        return [
+            'total_orders' => (int) $merge->affected_orders_count,
+            'delivered_orders' => null,
+            'returned_orders' => (int) $merge->affected_returns_count,
+            'cancelled_orders' => null,
+            'total_spent' => null,
+            'outstanding_balance' => null,
+            'cod_orders' => null,
+            'cod_collected_orders' => null,
+            'cod_success_rate' => null,
+            'return_rate' => null,
+            'average_order_value' => null,
+            'last_order_at' => null,
+            'from_merge_log' => true,
+            'merge_id' => (int) $merge->id,
+            'merge_at' => optional($merge->created_at)->toIso8601String(),
+        ];
+    }
+
+    /**
      * C-2: read-only duplicate-customer detector.
      *
      * Uses the O-2 indexed `normalized_phone` column. Excludes the
@@ -889,6 +1192,10 @@ class CustomersController extends Controller
             ->where('normalized_phone', $customer->normalized_phone)
             ->where('id', '!=', $customer->id)
             ->whereNull('deleted_at')
+            // C-5B: hide rows that were already merged away — they'd
+            // otherwise resurface as "duplicates" of new customers
+            // that share the same normalized phone.
+            ->whereNull('merged_into_customer_id')
             ->limit(5) // sane cap — operator clicks through to inspect
             ->get(['id', 'name', 'primary_phone'])
             ->map(fn ($c) => [
@@ -1167,6 +1474,47 @@ class CustomersController extends Controller
             ];
         }
 
+        // 8. Customer merges (C-5B). Emit one `customer_merged_in`
+        //    event for every merge where this customer was the target,
+        //    and one `customer_merged_out` event for the source-side
+        //    timeline. Both go through `customer_merges` indexed on
+        //    the relevant FK so the per-customer scan is cheap.
+        $merges = \App\Models\CustomerMerge::query()
+            ->where(function ($q) use ($customer) {
+                $q->where('target_customer_id', $customer->id)
+                    ->orWhere('source_customer_id', $customer->id);
+            })
+            ->with(['mergedBy:id,name', 'sourceCustomer:id,name', 'targetCustomer:id,name'])
+            ->latest('id')
+            ->limit($cap)
+            ->get();
+
+        foreach ($merges as $m) {
+            $isTarget = (int) $m->target_customer_id === (int) $customer->id;
+            $other = $isTarget ? $m->sourceCustomer : $m->targetCustomer;
+            $otherName = $other?->name ?? ('Customer #' . ($isTarget ? $m->source_customer_id : $m->target_customer_id));
+            $events[] = [
+                'id' => ($isTarget ? 'customer_merged_in:' : 'customer_merged_out:') . $m->id,
+                'type' => $isTarget ? 'customer_merged_in' : 'customer_merged_out',
+                'title' => $isTarget
+                    ? "Merged from {$otherName}"
+                    : "Merged into {$otherName}",
+                'subtitle' => sprintf(
+                    '%d order(s), %d return(s), %d refund(s) reassigned',
+                    $m->affected_orders_count,
+                    $m->affected_returns_count,
+                    $m->affected_refunds_count,
+                ),
+                'timestamp' => optional($m->created_at)->toIso8601String(),
+                'actor_name' => optional($m->mergedBy)->name,
+                'tone' => 'slate',
+                // Link to the OTHER side of the merge so the operator
+                // can navigate the merge graph.
+                'href' => $other ? route('customers.show', $other->id) : null,
+                'meta' => ['merge_id' => $m->id, 'is_target' => $isTarget],
+            ];
+        }
+
         // Sort merged events by timestamp DESC. Events with null
         // timestamps (shouldn't happen — every source has indexed
         // timestamps) sort last.
@@ -1191,6 +1539,9 @@ class CustomersController extends Controller
 
     public function update(UpdateCustomerRequest $request, Customer $customer): RedirectResponse
     {
+        // M1 (C-5B must-fix): block edits to a merged-away customer.
+        if ($redirect = $this->blockIfMerged($customer)) return $redirect;
+
         $data = $request->validated();
         $tags = $data['tags'] ?? null; // null => leave alone
         unset($data['tags']);

@@ -289,8 +289,90 @@
 - [ ] **(C-5A → deferred to C-5B)** Actual merge execution — reassignment of orders/returns/refunds/notes/addresses/tags + source-row marking + audit log + timeline event on target.
 - [ ] **(C-5A → deferred to C-5C)** Approval workflow on merges.
 - [ ] **(C-5A → deferred)** Rollback command (depends on C-5B's `customer_merges.payload`).
-- [ ] **(C-5A → deferred until C-5B lands)** Filter `merged_into_customer_id` out of the C-2 duplicate detector.
-- [ ] **(C-5A → deferred until C-5B duplicates are resolved)** Unique constraint on `customers.normalized_phone`.
+- [x] **(C-5A → shipped in C-5B 2026-05-17)** Filter `merged_into_customer_id` out of the C-2 duplicate detector.
+- [ ] **(C-5A → deferred until C-5B duplicates are resolved in production)** Unique constraint on `customers.normalized_phone`.
+
+---
+
+## 8g. Duplicate Merge Execution (C-5B)
+
+**Shipped 2026-05-17.** Auto-tested by `tests/Feature/Customers/CustomerMergeExecutionTest.php` (16 tests). Full regression: 580 / 580.
+
+- [x] **(C-5B)** Merge endpoint reassigns `orders.customer_id`, `returns.customer_id`, `refunds.customer_id`, `customer_notes.customer_id`, `customer_addresses.customer_id`, `customer_tags.customer_id` to the target.
+- [x] **(C-5B)** **Order snapshot columns NEVER touched** — `customer_name`, `customer_phone`, `customer_phone_secondary`, `customer_phone_whatsapp`, `customer_phone_normalized`, `customer_address`, `city`, `governorate`, `country` on `orders` retain their historical values. Pinned by the `merge_does_not_touch_order_snapshot_columns` test.
+- [x] **(C-5B)** Tag union de-dups overlapping strings (no duplicate `(customer_id, tag)` pairs after merge).
+- [x] **(C-5B)** Address book single-default invariant holds on target (only one `is_default=true` per customer).
+- [x] **(C-5B)** Source row marked `merged_into_customer_id`, `merged_at`, `merged_by`. **NOT soft-deleted.**
+- [x] **(C-5B)** `customer_merges` row persisted with affected counts + `payload` JSON (source profile snapshot + lists of affected ids per table).
+- [x] **(C-5B)** Audit-log rows on both sides: `merged_out` on source, `merged_in` on target. Both reference the merge id.
+- [x] **(C-5B)** Already-merged source rejected at execute (422 / session errors).
+- [x] **(C-5B)** Reason shorter than 10 characters rejected at execute.
+- [x] **(C-5B)** Confirmation phrase other than `MERGE` (exact case) rejected at execute.
+- [x] **(C-5B)** Permission gate `customers.merge` enforced — users with only view/edit/delete are forbidden.
+- [x] **(C-5B)** Cross-phone merge (source.normalized_phone ≠ target.normalized_phone) requires super-admin. Non-super-admin operators see a blocked form in the preview.
+- [x] **(C-5B)** Merge runs inside a single DB transaction. Any internal failure rolls back the entire merge.
+- [x] **(C-5B)** Concurrent merges on the same pair are serialized via `SELECT FOR UPDATE` on source + target (sorted id order to avoid deadlock).
+- [x] **(C-5B)** C-2 duplicate detector filters `merged_into_customer_id IS NULL` so a merged-out source never resurfaces as a duplicate.
+- [x] **(C-5B)** C-3 timeline emits `customer_merged_in` on the target and `customer_merged_out` on the source.
+- [x] **(C-5B)** Customer Show on a merged source renders a tombstone banner pointing at the surviving customer; create-order / duplicate-last-order / edit / delete actions are suppressed.
+- [x] **(C-5B)** Target's `risk_score` is recomputed after the merge via `CustomerRiskService`.
+- [ ] **(C-5B → deferred to C-5C)** Approval workflow on merges.
+- [ ] **(C-5B → deferred)** `php artisan customers:rollback-merge {merge_id}` command — payload is already in place.
+- [ ] **(C-5B → deferred)** Cascading merge re-targeting (if A was merged into B and an operator picks A again, the service rejects rather than auto-resolving to B).
+- [ ] **(C-5B → deferred until production duplicates resolved)** UNIQUE constraint on `customers.normalized_phone`.
+
+---
+
+## 8h. C-5B Must-Fix (M1–M6) — shipped 2026-05-17
+
+**Shipped 2026-05-17.** Auto-tested by `tests/Feature/Customers/CustomerMergeMustFixTest.php` (25 tests).
+
+### M1 — Write leaks on merged sources blocked
+- [x] **(M1)** `POST /customers/{merged}/notes` redirects to surviving customer + audit row.
+- [x] **(M1)** `POST/PUT/PATCH/DELETE /customers/{merged}/addresses/*` redirects to surviving customer.
+- [x] **(M1)** `PUT /customers/{merged}` (customer edit) redirects to surviving customer.
+- [x] **(M1)** `GET /orders/create?customer_id={merged}` redirects to `?customer_id={target}` with flash.
+- [x] **(M1)** `POST /orders` with `customer_id = merged` returns 422 with field error on `customer_id`.
+- [x] **(M1)** Every blocked write writes a `write_blocked_merged_source` audit log row with the attempted URL + HTTP method.
+
+### M2 — Observer-skip mitigation
+- [x] **(M2)** `App\Events\CustomerRecordsReassigned` event dispatched after the merge transaction commits.
+- [x] **(M2)** Event carries source/target ids, merge id, affected-id lists per table (orders/returns/refunds/notes/addresses/tags), actor id.
+- [x] **(M2)** Fires OUTSIDE the transaction so listeners see committed state.
+- [ ] **(M2 → deferred until first subscriber lands)** Concrete listener (marketer wallet recompute / search index / n8n webhook). The event is the canonical hook for when modules need it.
+
+### M3a — Feature flag enforcement
+- [x] **(M3a)** `customer_merge_enabled` setting (boolean, default false) ships with the migration.
+- [x] **(M3a)** Controller `executeMerge` rejects with audit when flag is off.
+- [x] **(M3a)** Service `merge()` rejects with `RuntimeException` when flag is off (defence-in-depth).
+- [x] **(M3a)** Preview page renders an info banner when flag is off; execute form is suppressed via `can_execute_merge = false`.
+- [x] **(M3a)** Toggling flag without redeploy: `App\Services\SettingsService::set('customer_merge_enabled', true, 'customers', 'boolean')`.
+
+### M3b — Field-merge policies on target
+- [x] **(M3b)** `secondary_phone` (+ all normalized triple columns) copied from source when target's slot is empty.
+- [x] **(M3b)** `email` copied from source when target's slot is empty.
+- [x] **(M3b)** `customer_type` promoted on target when source is more restrictive (Blacklist > Watchlist > VIP > Normal). Never demoted.
+- [x] **(M3b)** `risk_level` promoted on target when source is higher (High > Medium > Low). Never demoted. Numeric `risk_score` recomputed from orders after reassignment.
+- [x] **(M3b)** Source's legacy `customers.notes` text converted to a `customer_notes` row on target tagged "Imported from merged customer #X".
+- [x] **(M3b)** Pre-merge target profile + the applied patch persisted in `customer_merges.payload.target_profile_pre_merge` + `target_patch_applied`. Foundation for rollback.
+
+### M4 — Tombstone stats from merge log
+- [x] **(M4)** Customer Show on a merged customer sources `stats` from the latest `customer_merges` row instead of live queries.
+- [x] **(M4)** Stats prop carries `from_merge_log = true`, `merge_id`, `merge_at` so the UI can switch to "Counts at time of merge" labelling.
+- [x] **(M4)** UI hides cards we can't reconstruct (delivered split / COD math / AOV / outstanding) rather than rendering them as "—".
+
+### M5 — Wrong-direction acknowledge
+- [x] **(M5)** Preview ships `wrong_direction = true` when `recommended_target_id !== URL target.id`.
+- [x] **(M5)** Execute form renders a prominent amber warning + an acknowledgement checkbox above the Execute button.
+- [x] **(M5)** Server-side `executeMerge` rejects with field error on `wrong_direction_ack` when the checkbox wasn't ticked.
+- [x] **(M5)** Rejection writes a `merge_rejected` audit row with `reason_code = wrong_direction_unacknowledged`.
+
+### M6 — Rejected attempt auditing
+- [x] **(M6)** Every rejection path writes an `audit_logs` row with `action = merge_rejected` + classified `reason_code`. Reason codes pin-list:
+  - `feature_flag_off`, `wrong_confirmation`, `wrong_direction_unacknowledged`,
+  - `source_equals_target`, `soft_deleted`,
+  - `already_merged_source`, `already_merged_target`,
+  - `short_reason`, `cross_phone_non_super_admin`, `unknown`.
 
 ---
 

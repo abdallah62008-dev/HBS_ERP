@@ -151,7 +151,7 @@ class OrdersController extends Controller
         ]);
     }
 
-    public function create(Request $request): Response
+    public function create(Request $request): Response|RedirectResponse
     {
         $user = $request->user();
         $canViewProfit = (bool) $user?->hasPermission('orders.view_profit');
@@ -246,10 +246,32 @@ class OrdersController extends Controller
         // already setting the customer. Duplicate-from wins because its
         // payload contains items too — overriding it with a different
         // customer would silently break the operator's intent.
+        //
+        // C-5B Must-Fix M1: if the prefill customer has been merged
+        // away, redirect the operator to the surviving customer's
+        // Show page. Otherwise they'd silently create a fresh order
+        // against a tombstone (which our M1 store-side guard would
+        // then reject — surface the error early on the GET instead).
         if ($prefillCustomerId > 0 && $duplicateFrom === null) {
             $customerModel = \App\Models\Customer::query()
                 ->whereNull('deleted_at')
                 ->find($prefillCustomerId);
+            if ($customerModel && $customerModel->merged_into_customer_id) {
+                \App\Services\AuditLogService::log(
+                    action: 'write_blocked_merged_source',
+                    module: 'customers',
+                    recordType: \App\Models\Customer::class,
+                    recordId: $customerModel->id,
+                    newValues: [
+                        'merged_into_customer_id' => $customerModel->merged_into_customer_id,
+                        'attempted_url' => $request->fullUrl(),
+                        'method' => 'GET (orders.create prefill)',
+                    ],
+                );
+                return redirect()
+                    ->route('orders.create', ['customer_id' => $customerModel->merged_into_customer_id])
+                    ->with('error', "Customer #{$customerModel->id} was merged into Customer #{$customerModel->merged_into_customer_id}. Continue on the surviving customer.");
+            }
             if ($customerModel) {
                 // Cost/profit fields are deliberately excluded — the
                 // prefill payload is safe for any caller. Marketers
@@ -493,6 +515,33 @@ class OrdersController extends Controller
         $submitAction = $payload['submit_action'] ?? 'save';
         unset($payload['submit_action']);
         $payload['created_by'] = Auth::id();
+
+        // C-5B Must-Fix M1: reject orders whose customer_id resolves
+        // to a merged-away customer. The Create page redirects on
+        // GET; this is the belt-and-braces server guard against a
+        // direct POST that bypassed the GET.
+        if (! empty($payload['customer_id'])) {
+            $merged = \App\Models\Customer::query()
+                ->whereKey((int) $payload['customer_id'])
+                ->whereNotNull('merged_into_customer_id')
+                ->first(['id', 'merged_into_customer_id']);
+            if ($merged) {
+                \App\Services\AuditLogService::log(
+                    action: 'write_blocked_merged_source',
+                    module: 'customers',
+                    recordType: \App\Models\Customer::class,
+                    recordId: $merged->id,
+                    newValues: [
+                        'merged_into_customer_id' => $merged->merged_into_customer_id,
+                        'attempted_url' => $request->fullUrl(),
+                        'method' => 'POST (orders.store)',
+                    ],
+                );
+                return back()
+                    ->withErrors(['customer_id' => "Customer #{$merged->id} was merged into Customer #{$merged->merged_into_customer_id}. Use the surviving customer."])
+                    ->withInput();
+            }
+        }
 
         $order = $this->orderService->createFromPayload($payload);
 
