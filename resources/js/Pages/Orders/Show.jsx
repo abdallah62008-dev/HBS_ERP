@@ -21,7 +21,7 @@ function Field({ label, value }) {
 
 export default function OrderShow({
     order,
-    statuses,
+    allowed_transitions = [],
     return_reasons = [],
     return_conditions = ['Good', 'Damaged', 'Missing Parts', 'Unknown'],
     can_create_return = false,
@@ -47,16 +47,27 @@ export default function OrderShow({
         },
     });
 
-    // Filter the status dropdown:
-    //   - Hide "Returned" when the user lacks returns.create OR the
-    //     order already has a return (the one-return-per-order rule).
-    //   - Everything else stays.
+    // Status dropdown options (R11 Transition DAG):
+    //   - The current status stays as the no-op baseline so the
+    //     <select value> always has a matching <option> (a status is
+    //     never in its own outgoing-edge list).
+    //   - `allowed_transitions` (from the backend) supplies the legal
+    //     forward moves — illegal jumps such as New -> Delivered never
+    //     render, so the operator can't even attempt one.
+    //   - "Returned" is additionally hidden when the user lacks
+    //     returns.create OR the order already has a return (the
+    //     one-return-per-order rule).
+    // The server-side gate in OrderService::changeStatus remains the
+    // enforcement backstop; this filter is UX only.
     const availableStatuses = useMemo(() => {
-        return statuses.filter((s) => {
+        const list = [order.status, ...allowed_transitions].filter(
+            (s, i, arr) => arr.indexOf(s) === i,
+        );
+        return list.filter((s) => {
             if (s !== 'Returned') return true;
             return can_create_return && !has_return;
         });
-    }, [statuses, can_create_return, has_return]);
+    }, [order.status, allowed_transitions, can_create_return, has_return]);
 
     const isReturning = form.data.status === 'Returned';
 

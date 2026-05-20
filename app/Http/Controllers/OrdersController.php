@@ -638,6 +638,12 @@ class OrdersController extends Controller
         return Inertia::render('Orders/Show', [
             'order' => $order,
             'statuses' => Order::STATUSES,
+            // R11 — the legal forward transitions for THIS order's current
+            // status. The Change Status modal renders only these (plus the
+            // current status as the no-op baseline). The server-side DAG
+            // gate in OrderService::changeStatus stays the enforcement
+            // backstop; this prop is UX only.
+            'allowed_transitions' => Order::ALLOWED_TRANSITIONS[$order->status] ?? [],
             'return_reasons' => ReturnReason::where('status', 'Active')
                 ->orderBy('name')
                 ->get(['id', 'name']),
