@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\IllegalOrderTransitionException;
 use App\Models\Customer;
 use App\Models\FiscalYear;
 use App\Models\Marketer;
@@ -193,6 +194,15 @@ class OrderService
 
         if ($order->status === $newStatus) {
             return $order;
+        }
+
+        // R11 — Transition DAG gate. Reject illegal jumps (e.g. New →
+        // Delivered) BEFORE any downstream side-effect — shipping
+        // checklist, inventory movement, history row or audit log — runs.
+        // The DAG lives on Order so the status vocabulary and its legal
+        // edges stay co-located.
+        if (! Order::isLegalTransition($order->status, $newStatus)) {
+            throw IllegalOrderTransitionException::from($order, $newStatus);
         }
 
         // Shipping checklist gate. Throws if any blocking rule fails;

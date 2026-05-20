@@ -34,6 +34,98 @@ class Order extends Model
         'On Hold', 'Need Review',
     ];
 
+    /**
+     * R11 — Order status Transition DAG.
+     *
+     * Every key is a current status; the array value is the exhaustive
+     * set of statuses that status may transition to. Anything not listed
+     * is rejected by OrderService::changeStatus with an
+     * IllegalOrderTransitionException.
+     *
+     * Design:
+     *   - Pre-confirmation (New, Pending Confirmation): confirm, cancel,
+     *     or pause.
+     *   - Pre-ship phase (Confirmed, Ready to Pack, Packed, Ready to Ship):
+     *     the warehouse sub-states are OPTIONAL refinements — an operator
+     *     may fast-forward straight to Shipped or work through them.
+     *     Cancellable until the package leaves the warehouse, and may be
+     *     marked Returned directly (customer refuses / aborts a live
+     *     order — inventory no-op for a pre-ship origin).
+     *   - Post-ship (Shipped, Out for Delivery, Delivered): forward-only
+     *     toward Delivered, lateral to Returned. No cancellation.
+     *   - Returned, Cancelled: terminal.
+     *   - On Hold / Need Review: pause overlays — resume to any pre-ship
+     *     open state or terminate; cannot jump straight to a post-ship
+     *     state (resume first, then advance normally).
+     *
+     * Consistent with the inventory matrix in
+     * OrderService::applyInventoryForTransition (reserve on Confirmed,
+     * release on Cancelled, ship on Shipped, no-op on Returned) and with
+     * the live transitions performed by ShippingController.
+     *
+     * (inferred) — the source Order_P0_Doc enumerates the 13 statuses but
+     * not the edges; this matrix was reconciled against ShippingController
+     * and the existing Returns test fixtures so it rejects no transition
+     * the system already performs.
+     *
+     * @var array<string, array<int, string>>
+     */
+    public const ALLOWED_TRANSITIONS = [
+        'New' => [
+            'Pending Confirmation', 'Confirmed',
+            'Cancelled', 'On Hold', 'Need Review',
+        ],
+        'Pending Confirmation' => [
+            'Confirmed',
+            'Cancelled', 'On Hold', 'Need Review',
+        ],
+        'Confirmed' => [
+            'Ready to Pack', 'Packed', 'Ready to Ship', 'Shipped',
+            'Returned', 'Cancelled', 'On Hold', 'Need Review',
+        ],
+        'Ready to Pack' => [
+            'Packed', 'Ready to Ship', 'Shipped',
+            'Returned', 'Cancelled', 'On Hold', 'Need Review',
+        ],
+        'Packed' => [
+            'Ready to Ship', 'Shipped',
+            'Returned', 'Cancelled', 'On Hold', 'Need Review',
+        ],
+        'Ready to Ship' => [
+            'Shipped',
+            'Returned', 'Cancelled', 'On Hold', 'Need Review',
+        ],
+        'Shipped' => [
+            'Out for Delivery', 'Delivered', 'Returned',
+        ],
+        'Out for Delivery' => [
+            'Delivered', 'Returned',
+        ],
+        'Delivered' => [
+            'Returned',
+        ],
+        'Returned'  => [], // terminal
+        'Cancelled' => [], // terminal
+        'On Hold' => [
+            'New', 'Pending Confirmation', 'Confirmed',
+            'Ready to Pack', 'Packed', 'Ready to Ship',
+            'Cancelled', 'Need Review',
+        ],
+        'Need Review' => [
+            'New', 'Pending Confirmation', 'Confirmed',
+            'Ready to Pack', 'Packed', 'Ready to Ship',
+            'Cancelled', 'On Hold',
+        ],
+    ];
+
+    /**
+     * R11 — true if $from → $to is a legal transition per the DAG.
+     */
+    public static function isLegalTransition(string $from, string $to): bool
+    {
+        return in_array($to, self::ALLOWED_TRANSITIONS[$from] ?? [], true);
+    }
+
     protected $fillable = [
         'order_number', 'fiscal_year_id', 'customer_id', 'marketer_id',
         'source', 'external_order_reference', 'entry_code',

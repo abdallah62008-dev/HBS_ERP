@@ -113,7 +113,7 @@ class ReturnInventoryTest extends TestCase
         $this->orderService->changeStatus($order, 'Confirmed');
         $this->satisfyShippingChecklist($order);
         $this->orderService->changeStatus($order->fresh(), 'Shipped');
-        $this->orderService->changeStatus($order, 'Delivered');
+        $this->orderService->changeStatus($order->fresh(), 'Delivered');
 
         $this->assertSame(98, $this->inventory->onHandStock($this->product->id, null),
             'Pre-condition: post-ship on-hand is 100 − 2 = 98.');
@@ -161,7 +161,7 @@ class ReturnInventoryTest extends TestCase
         $this->orderService->changeStatus($order, 'Confirmed');
         $this->satisfyShippingChecklist($order);
         $this->orderService->changeStatus($order->fresh(), 'Shipped');
-        $this->orderService->changeStatus($order, 'Delivered');
+        $this->orderService->changeStatus($order->fresh(), 'Delivered');
         $this->orderService->changeStatus($order->fresh(), 'Returned');
 
         // Before inspection: on-hand is still the post-Ship level.
