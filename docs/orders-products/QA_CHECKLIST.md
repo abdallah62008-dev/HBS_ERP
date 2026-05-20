@@ -376,6 +376,36 @@
 
 ---
 
+## 8i. Order Status Transition DAG (R-11)
+
+**Shipped 2026-05-20.** Auto-tested by `tests/Feature/Orders/OrderTransitionDagTest.php` (33 tests) + `tests/Feature/Orders/OrderShowAllowedTransitionsTest.php` (5 tests). Full regression: 643 / 643.
+
+### Enforcement gate (commit 50bc165)
+- [x] **(R-11)** `Order::ALLOWED_TRANSITIONS` declares a legal-edge set for all 13 `Order::STATUSES`.
+- [x] **(R-11)** `OrderService::changeStatus` rejects an illegal jump (e.g. `New → Delivered`) with `IllegalOrderTransitionException`.
+- [x] **(R-11)** The DAG gate runs BEFORE any side-effect — a rejected transition writes no `order_status_history` row, no audit log, no inventory movement.
+- [x] **(R-11)** Legal transitions still pass: `Confirmed → Shipped` fast-forward, pre-ship `Confirmed / Packed → Returned`, `Shipped → Delivered`, `On Hold → Confirmed` resume.
+- [x] **(R-11)** `Returned` and `Cancelled` are terminal — every outgoing transition is rejected.
+- [x] **(R-11)** An unknown status (not in `STATUSES`) still throws the original `RuntimeException` — pre-R-11 behaviour preserved.
+- [x] **(R-11)** `IllegalOrderTransitionException` extends `RuntimeException`, so existing controller `catch (RuntimeException | Throwable)` blocks absorb it — no 500s.
+
+### Frontend dropdown (commit 2ff838b)
+- [x] **(R-11)** `OrdersController::show` ships an `allowed_transitions` Inertia prop = `Order::ALLOWED_TRANSITIONS[$order->status] ?? []`.
+- [x] **(R-11)** The `Orders/Show` Change Status dropdown renders only legal targets + the current status (no-op baseline); illegal jumps never appear.
+- [x] **(R-11)** The `allowed_transitions` prop never contains an illegal jump (pinned across 6 statuses) and never contains the current status.
+- [x] **(R-11)** A terminal order (`Returned`) → `allowed_transitions = []` → the dropdown shows only the current status.
+- [x] **(R-11)** The existing `Returned` permission / one-return-per-order filter is preserved on top of the DAG filter.
+
+### Legacy audit & follow-ups
+- [x] **(R-11 PR-3)** Dev `order_status_history` audited — 11 pre-DAG illegal rows (dev test data) accepted as historic noise; the gate is forward-only and never replays history.
+- [x] **(R-11)** `ShippingController` verified R-11-safe — guards `=== 'Confirmed'` + `catch (Throwable)`; no change required.
+- [ ] **(R-11 → deferred)** Audit-log rejected transition attempts (`action = status_change_rejected`).
+- [ ] **(R-11 → deferred)** Filter the `Orders/Edit` status dropdown (the server gate already covers it).
+- [ ] **(R-11 → deferred)** Explicit backward / corrective transitions (the DAG is forward-only).
+- [ ] **(R-11 → re-run on production)** PR-3 audit before enabling R-11 in production.
+
+---
+
 ## 9. Save & Add New (O-1)
 
 - [ ] **(O-1)** Submitting "Save & Add New" preserves: branch, source, marketer (operator option to keep or reset).

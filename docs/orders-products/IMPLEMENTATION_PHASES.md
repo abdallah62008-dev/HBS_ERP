@@ -545,6 +545,70 @@ The architecture review surfaced six high-/medium-severity items beyond the orig
 
 ---
 
+## 4h. Phase R-11 — Order Status Transition DAG
+
+| Field | Value |
+|---|---|
+| Code | R-11 (Order_P0_Doc Phase 1) |
+| Risk | Medium — touches the core `OrderService::changeStatus` write path; mitigated by an additive gate + full-suite regression |
+| Depends on | — (additive; the 13 `Order::STATUSES` already existed) |
+| Effort | ~1 dev-day |
+| Status | **Shipped 2026-05-20** |
+
+> R-11 is the first item delivered from the **Order_P0_Doc Phase 1 plan** (the
+> order-system review backlog) — not the Customer 360 series. It is filed as
+> `4h` only to keep the surrounding section numbers stable.
+
+### Shipped
+- **Commit `50bc165`** — DAG enforcement:
+  - `Order::ALLOWED_TRANSITIONS` — explicit map of every legal status edge, keyed by all 13 `Order::STATUSES`. Pre-ship warehouse sub-states (`Confirmed`, `Ready to Pack`, `Packed`, `Ready to Ship`) are optional refinements — an operator may fast-forward straight to `Shipped`. Pre-ship fulfilment states may also be marked `Returned` directly. `Returned` / `Cancelled` are terminal. `On Hold` / `Need Review` are pause overlays.
+  - `Order::isLegalTransition($from, $to)` — boolean helper reading the DAG.
+  - `App\Exceptions\IllegalOrderTransitionException` — typed; carries order id / number + from/to statuses + `allowedTargets()`. Extends `RuntimeException` so existing `catch` blocks absorb it (the gate is additive).
+  - `OrderService::changeStatus` — DAG gate inserted after the unknown-status guard and **before** any side-effect (shipping checklist, inventory, history row, audit log). An illegal jump throws before any write.
+  - `tests/Feature/Orders/OrderTransitionDagTest.php` — 33 tests: DAG structure, every legal/illegal edge, terminal states, gate wiring, and the no-side-effect-on-rejection guarantee.
+  - Regression-surfaced fix: `tests/Feature/Returns/ReturnInventoryTest.php` had a latent stale-`$order` bug (two `changeStatus` calls passed an in-memory `Confirmed` instance instead of `$order->fresh()`); corrected to `->fresh()`.
+- **Commit `2ff838b`** — frontend dropdown filter:
+  - `OrdersController::show` ships an `allowed_transitions` Inertia prop = `Order::ALLOWED_TRANSITIONS[$order->status] ?? []`.
+  - `Orders/Show.jsx` — the Change Status modal's `availableStatuses` memo is re-based on the DAG: `[current status as no-op baseline, ...allowed_transitions]`, de-duped, with the existing `Returned` permission / one-return rule preserved. Illegal jumps never render.
+  - `tests/Feature/Orders/OrderShowAllowedTransitionsTest.php` — 5 Inertia-prop tests.
+
+### Defense-in-depth (two layers)
+| Layer | Mechanism |
+|---|---|
+| UX | The Change Status dropdown renders only legal options — an illegal jump cannot be selected. |
+| Enforcement | `OrderService::changeStatus` throws `IllegalOrderTransitionException` for any bad transition that still arrives (bypassed UI / stale tab / API client). |
+
+The dropdown filter does NOT replace the server gate — both stay.
+
+### DAG edges — inferred
+The source `Order_P0_Doc` enumerates the 13 statuses but not the edges. The matrix was reconciled against `ShippingController` and the existing Returns test fixtures so it rejects no transition the system already performs — notably the `Confirmed → Shipped` fast-forward and pre-ship `→ Returned`.
+
+### Migrations / permissions
+- **None.** R-11 is pure application logic — no schema change, no new permission slug.
+
+### PR-3 legacy audit
+- Dev DB scan: 32 `order_status_history` rows, **11** historical transitions violate the new DAG (`New → Ready to Ship`, `Returned → Shipped`, `Ready to Ship → Delivered`) — all dated 10–16 May 2026, dev test data. Accepted as historic noise: the gate is **forward-only** and never replays history. Re-run the audit on production before enabling there.
+
+### Follow-up — ShippingController
+The audit traced the `New / Pending Confirmation → Ready to Ship` rows to `ShippingController::assign` (carrier-assignment auto-advance). The controller **already** guards `$order->status === 'Confirmed'` and wraps every `changeStatus` call in `catch (Throwable)`, so post-R-11 it surfaces a clean flash error rather than a 500. No controller change required — verified by reading `ShippingController` + `OrdersController` (both catch `RuntimeException` / `Throwable`).
+
+### Deferred items
+- ⛔ **Backward / corrective transitions** — the DAG is forward-only. If operators need an explicit "undo" (e.g. `Packed → Ready to Pack`), add the edge in a follow-up.
+- ⛔ **Audit-logging rejected attempts** — `changeStatus` does not write an audit row when it rejects an illegal jump. Recommended (`action = status_change_rejected`) to detect UI bugs / probing; deferred.
+- ⛔ **Edit-page dropdown** — `Orders/Edit.jsx` still lists all `STATUSES`; only `Orders/Show.jsx` was filtered. The server gate covers it; the UX polish is deferred.
+
+### Exit criteria — verified
+- ✅ `ALLOWED_TRANSITIONS` covers all 13 statuses; every target is a known status.
+- ✅ An illegal jump (e.g. `New → Delivered`) throws `IllegalOrderTransitionException` before any side-effect.
+- ✅ A rejected transition writes no `order_status_history` row.
+- ✅ Legal transitions accepted — incl. `Confirmed → Shipped` fast-forward and pre-ship `→ Returned`.
+- ✅ Terminal `Returned` / `Cancelled` reject all outgoing transitions.
+- ✅ Unknown status still throws the original `RuntimeException` (pre-R-11 behaviour preserved).
+- ✅ `Orders/Show` dropdown renders only legal targets + the current-status baseline.
+- ✅ Full regression: **643 / 643** (33 new DAG tests + 5 new dropdown tests; the 3 stale-instance failures in `ReturnInventoryTest` surfaced by the gate were fixed; 0 regressions).
+
+---
+
 ## 5. Phase P-2 — Pricing UX
 
 | Field | Value |
