@@ -140,6 +140,81 @@ function HBarList({ data, total, barColor = 'bg-indigo-500' }) {
     );
 }
 
+/* R15 — fulfilment SLA summary + open-order ageing widgets. */
+
+function fmtHours(hours) {
+    if (hours === null || hours === undefined) return '—';
+    if (hours >= 48) return `${(hours / 24).toFixed(1)}d`;
+    return `${Number(hours).toFixed(1)}h`;
+}
+
+function slaRateColor(rate) {
+    if (rate === null || rate === undefined) return 'text-slate-400';
+    if (rate >= 90) return 'text-emerald-600';
+    if (rate >= 70) return 'text-amber-600';
+    return 'text-red-600';
+}
+
+const SLA_STAGES = [
+    { key: 'confirm', label: 'Confirm' },
+    { key: 'ship', label: 'Ship' },
+    { key: 'deliver', label: 'Deliver' },
+];
+
+function SlaSummary({ metrics }) {
+    if (!metrics) return <EmptyState text="No SLA data yet" />;
+    return (
+        <ul className="space-y-3">
+            {SLA_STAGES.map((s) => {
+                const m = metrics[s.key];
+                const empty = !m || m.count === 0;
+                return (
+                    <li key={s.key} className="flex items-center justify-between gap-3">
+                        <div>
+                            <div className="text-sm font-medium text-slate-700">{s.label}</div>
+                            <div className="text-[11px] text-slate-400">
+                                {empty
+                                    ? 'no orders reached this stage'
+                                    : `p50 ${fmtHours(m.p50_hours)} · p95 ${fmtHours(m.p95_hours)} · ${m.count} orders`}
+                            </div>
+                        </div>
+                        <div className="text-right">
+                            <div className={'text-lg font-semibold tabular-nums ' + slaRateColor(empty ? null : m.on_time_rate)}>
+                                {empty ? '—' : `${m.on_time_rate}%`}
+                            </div>
+                            <div className="text-[10px] text-slate-400">on time</div>
+                        </div>
+                    </li>
+                );
+            })}
+        </ul>
+    );
+}
+
+function AgeingByStatusList({ rows }) {
+    const open = (rows ?? []).filter((r) => r.count > 0);
+    if (open.length === 0) return <EmptyState text="No open orders" />;
+    return (
+        <ul className="space-y-2">
+            {open.map((r) => (
+                <li key={r.status} className="flex items-center justify-between gap-3 text-xs">
+                    <StatusBadge value={r.status} />
+                    <div className="flex items-center gap-3 tabular-nums text-slate-500">
+                        <span className="text-slate-700">{r.count} open</span>
+                        <span>avg {r.avg_age_days ?? '—'}d</span>
+                        <span>max {r.max_age_days ?? '—'}d</span>
+                        {r.over_3d > 0 && (
+                            <span className="rounded-full bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-700">
+                                {r.over_3d} &gt; 3d
+                            </span>
+                        )}
+                    </div>
+                </li>
+            ))}
+        </ul>
+    );
+}
+
 function Card({ title, action, children, padded = true }) {
     return (
         <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -279,6 +354,22 @@ export default function Dashboard({ period, kpis, widgets, charts, tables, alert
         ? `${kpis.delivery_rate_mtd_delivered ?? 0} / ${kpis.delivery_rate_mtd_resolved} resolved`
         : undefined;
 
+    // R15 — return rate (MTD), sourced from widgets.return_rate.
+    const returnRate = widgets?.return_rate?.rate; // null when the cohort is empty
+    const returnRateText = returnRate == null ? '—' : `${returnRate}%`;
+    const returnRateHint = widgets?.return_rate?.resolved != null
+        ? `${widgets.return_rate.returned ?? 0} / ${widgets.return_rate.resolved} resolved`
+        : undefined;
+
+    // R15 — on-time ship %, sourced from the SLA widget's ship stage
+    // (widgets.sla.metrics.ship) — never recomputed here.
+    const shipSla = widgets?.sla?.metrics?.ship;
+    const onTimeShipRate = shipSla?.on_time_rate; // null when nothing shipped
+    const onTimeShipText = onTimeShipRate == null ? '—' : `${onTimeShipRate}%`;
+    const onTimeShipHint = shipSla && shipSla.count > 0
+        ? `${shipSla.on_time} / ${shipSla.count} on time`
+        : undefined;
+
     const dashboardUrl = route('dashboard');
 
     return (
@@ -378,6 +469,15 @@ export default function Dashboard({ period, kpis, widgets, charts, tables, alert
                         href={can('reports.sales') ? route('reports.sales') : undefined}
                     />
                 )}
+                {canViewOrders && (
+                    <KpiCard
+                        label="Return rate (MTD)"
+                        value={returnRateText}
+                        hint={returnRateHint}
+                        accent={returnRate != null && returnRate >= 15 ? 'red' : 'slate'}
+                        href={can('reports.profit') ? route('reports.returns') : undefined}
+                    />
+                )}
             </Section>
 
             {/* Fulfillment Operations — what's in flight right now. */}
@@ -407,6 +507,17 @@ export default function Dashboard({ period, kpis, widgets, charts, tables, alert
                     accent={kpis?.delayed_shipments > 0 ? 'red' : 'slate'}
                     href={can('shipping.view') ? route('shipping.delayed') : undefined}
                 />
+                {canViewOrders && (
+                    <KpiCard
+                        label="On-time ship % (MTD)"
+                        value={onTimeShipText}
+                        hint={onTimeShipHint}
+                        accent={onTimeShipRate != null && onTimeShipRate >= 90
+                            ? 'emerald'
+                            : (onTimeShipRate != null && onTimeShipRate < 70 ? 'red' : 'slate')}
+                        href={can('reports.shipping') ? route('reports.sla') : undefined}
+                    />
+                )}
             </Section>
 
             {/* Inventory Alerts — including the new Out of Stock tile. */}
@@ -497,6 +608,24 @@ export default function Dashboard({ period, kpis, widgets, charts, tables, alert
                             total={shipmentsTotal}
                             barColor="bg-sky-500"
                         />
+                    </Card>
+                </div>
+            )}
+
+            {/* R15 — fulfilment SLA summary + open-order ageing. Both are
+                gated by orders.view via the server-emitted widgets. */}
+            {canViewOrders && widgets?.sla && (
+                <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <Card
+                        title="Fulfilment SLA (MTD)"
+                        action={can('reports.shipping')
+                            ? <Link href={route('reports.sla')} className="text-xs text-indigo-600 hover:underline">Full report →</Link>
+                            : undefined}
+                    >
+                        <SlaSummary metrics={widgets.sla.metrics} />
+                    </Card>
+                    <Card title="Open order ageing">
+                        <AgeingByStatusList rows={widgets.ageing_by_status} />
                     </Card>
                 </div>
             )}

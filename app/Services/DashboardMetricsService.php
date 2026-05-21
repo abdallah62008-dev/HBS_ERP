@@ -301,6 +301,93 @@ class DashboardMetricsService
     }
 
     /**
+     * R15 — Return rate (MTD). returned / (delivered + returned +
+     * cancelled), over orders CREATED this month — the same
+     * terminal-state cohort as deliveryRateMtd(), so the two rates are
+     * directly comparable. Returns rate=null when the cohort is empty so
+     * the frontend can render a dash instead of a misleading 0%.
+     *
+     * @return array{rate:float|null, returned:int, resolved:int}
+     */
+    public function returnRateMtd(CarbonImmutable $monthStart): array
+    {
+        $row = Order::query()
+            ->where('created_at', '>=', $monthStart)
+            ->whereIn('status', ['Delivered', 'Returned', 'Cancelled'])
+            ->selectRaw("
+                COUNT(*) AS resolved,
+                SUM(CASE WHEN status = 'Returned' THEN 1 ELSE 0 END) AS returned
+            ")
+            ->first();
+
+        $resolved = (int) ($row->resolved ?? 0);
+        $returned = (int) ($row->returned ?? 0);
+        $rate = $resolved > 0 ? round(($returned / $resolved) * 100, 1) : null;
+
+        return ['rate' => $rate, 'returned' => $returned, 'resolved' => $resolved];
+    }
+
+    /**
+     * R15 — Ageing of still-open orders, grouped by status.
+     *
+     * For every status in Order::OPEN_STATUSES, reports how many orders
+     * are currently in it and how old they are (days since created_at):
+     * the average age, the oldest age, and a count of orders older than
+     * 3 days (a simple "needs attention" flag).
+     *
+     * Point-in-time — ignores the period selector. Ages are computed in
+     * PHP from Unix timestamps so the query runs identically on MySQL
+     * (production) and SQLite (the test database).
+     *
+     * @return array<int, array{status:string, count:int, avg_age_days:float|null, max_age_days:int|null, over_3d:int}>
+     */
+    public function ageingByStatus(): array
+    {
+        $now = CarbonImmutable::now();
+
+        $orders = Order::query()
+            ->whereIn('status', Order::OPEN_STATUSES)
+            ->get(['status', 'created_at']);
+
+        // Seed every open status so the widget always renders a full set.
+        $ages = [];
+        $over3d = [];
+        foreach (Order::OPEN_STATUSES as $status) {
+            $ages[$status] = [];
+            $over3d[$status] = 0;
+        }
+
+        foreach ($orders as $order) {
+            if ($order->created_at === null) {
+                continue;
+            }
+            $ageDays = ($now->getTimestamp() - $order->created_at->getTimestamp()) / 86400;
+            if ($ageDays < 0) {
+                $ageDays = 0.0;
+            }
+            $ages[$order->status][] = $ageDays;
+            if ($ageDays > 3) {
+                $over3d[$order->status]++;
+            }
+        }
+
+        $result = [];
+        foreach (Order::OPEN_STATUSES as $status) {
+            $sample = $ages[$status];
+            $count = count($sample);
+            $result[] = [
+                'status' => $status,
+                'count' => $count,
+                'avg_age_days' => $count > 0 ? round(array_sum($sample) / $count, 1) : null,
+                'max_age_days' => $count > 0 ? (int) floor(max($sample)) : null,
+                'over_3d' => $over3d[$status],
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
      * Out-of-stock product count. Uses the same SUM-CASE inventory pattern
      * as low-stock but the HAVING clause checks `on_hand <= 0`.
      */

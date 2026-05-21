@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\DashboardMetricsService;
+use App\Services\ReportsService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -32,7 +33,7 @@ use Inertia\Response;
  */
 class DashboardController extends Controller
 {
-    public function __invoke(Request $request, DashboardMetricsService $metrics): Response|RedirectResponse
+    public function __invoke(Request $request, DashboardMetricsService $metrics, ReportsService $reports): Response|RedirectResponse
     {
         $user = $request->user();
 
@@ -111,6 +112,21 @@ class DashboardController extends Controller
         $widgets = [];
         if ($can['shipping']) {
             $widgets['shipments_by_status'] = $metrics->shipmentsByStatus();
+        }
+
+        // R15 — fulfilment widgets, all gated by orders.view. SLA and
+        // return rate are MTD-framed (like delivery rate / AOV); ageing
+        // is point-in-time. ReportsService::sla() is the single source of
+        // SLA logic — the dashboard never recomputes lifecycle timings.
+        if ($can['orders']) {
+            $sla = $reports->sla($monthStart->toDateString(), $today->toDateString());
+            $widgets['sla'] = [
+                'from' => $sla['from'],
+                'to' => $sla['to'],
+                'metrics' => $sla['metrics'],
+            ];
+            $widgets['return_rate'] = $metrics->returnRateMtd($monthStart);
+            $widgets['ageing_by_status'] = $metrics->ageingByStatus();
         }
 
         $tables = [
