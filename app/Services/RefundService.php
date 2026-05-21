@@ -37,6 +37,91 @@ class RefundService
     public const MODULE = 'finance.refund';
 
     /**
+     * R4 — create a `requested` refund. The single write path behind
+     * RefundsController::store(): runs the collection- and return-level
+     * over-refund guards, inserts the row, and writes the audit entry —
+     * all inside one transaction so RefundService owns the entire write.
+     *
+     * @param  array<string,mixed>  $data  validated RefundRequest payload
+     * @throws InvalidArgumentException  when an over-refund guard fails
+     */
+    public function createRequested(array $data, ?User $user = null): Refund
+    {
+        $actor = $user ?? Auth::user();
+
+        return DB::transaction(function () use ($data, $actor) {
+            $this->assertRefundableAmount(
+                excludeRefundId: null,
+                collectionId: isset($data['collection_id']) ? (int) $data['collection_id'] : null,
+                proposedAmount: (float) $data['amount'],
+            );
+            $this->assertReturnRefundableAmount(
+                excludeRefundId: null,
+                orderReturnId: isset($data['order_return_id']) ? (int) $data['order_return_id'] : null,
+                proposedAmount: (float) $data['amount'],
+            );
+
+            $refund = Refund::create([
+                ...$data,
+                'status' => Refund::STATUS_REQUESTED,
+                'requested_by' => $actor?->id,
+            ]);
+
+            AuditLogService::logModelChange($refund, 'refund_created', self::MODULE);
+
+            return $refund;
+        });
+    }
+
+    /**
+     * R4 — update an editable (`requested`) refund. The single write path
+     * behind RefundsController::update(): locks the row, re-checks
+     * editability, re-runs the over-refund guards for the new amount,
+     * saves, and writes the audit entry.
+     *
+     * @param  array<string,mixed>  $data  validated RefundRequest payload
+     * @throws RuntimeException          when the refund is not editable
+     * @throws InvalidArgumentException  when an over-refund guard fails
+     */
+    public function updateRequested(Refund $refund, array $data): Refund
+    {
+        if (! $refund->canBeEdited()) {
+            throw new RuntimeException(
+                "Refund #{$refund->id} cannot be edited (status: {$refund->status})."
+            );
+        }
+
+        return DB::transaction(function () use ($refund, $data) {
+            $locked = Refund::query()->lockForUpdate()->findOrFail($refund->id);
+
+            if (! $locked->canBeEdited()) {
+                throw new RuntimeException(
+                    "Refund #{$locked->id} cannot be edited (status: {$locked->status})."
+                );
+            }
+
+            // Re-run the over-refund guards for the new amount, excluding
+            // this refund from the existing-sum so we don't double-count.
+            $this->assertRefundableAmount(
+                excludeRefundId: $locked->id,
+                collectionId: isset($data['collection_id']) ? (int) $data['collection_id'] : null,
+                proposedAmount: (float) $data['amount'],
+            );
+            $this->assertReturnRefundableAmount(
+                excludeRefundId: $locked->id,
+                orderReturnId: isset($data['order_return_id']) ? (int) $data['order_return_id'] : null,
+                proposedAmount: (float) $data['amount'],
+            );
+
+            $locked->fill($data)->save();
+
+            AuditLogService::logModelChange($locked, 'refund_updated', self::MODULE);
+
+            return $locked;
+        });
+    }
+
+    /**
      * Approve a requested refund.
      *
      * Guards (re-run inside a `lockForUpdate` transaction so two

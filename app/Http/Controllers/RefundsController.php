@@ -10,7 +10,6 @@ use App\Services\AuditLogService;
 use App\Services\RefundService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
 use Inertia\Response;
 use InvalidArgumentException;
@@ -103,34 +102,15 @@ class RefundsController extends Controller
 
     public function store(RefundRequest $request): RedirectResponse
     {
-        $data = $request->validated();
-
-        // Over-refund guard up-front so the operator gets a clear error
-        // before the row is inserted. Both the collection-level guard
-        // (Phase 5A) and the return-level guard (Phase 5C) run when
-        // their respective linkage IDs are present.
+        // R4 — RefundService::createRequested is the single writer: it
+        // runs the over-refund guards, inserts the row, and audits, all
+        // in one transaction. The controller only translates failures.
         try {
-            $this->service->assertRefundableAmount(
-                excludeRefundId: null,
-                collectionId: isset($data['collection_id']) ? (int) $data['collection_id'] : null,
-                proposedAmount: (float) $data['amount'],
-            );
-            $this->service->assertReturnRefundableAmount(
-                excludeRefundId: null,
-                orderReturnId: isset($data['order_return_id']) ? (int) $data['order_return_id'] : null,
-                proposedAmount: (float) $data['amount'],
-            );
+            $this->service->createRequested($request->validated(), $request->user());
         } catch (InvalidArgumentException $e) {
+            // Over-refund guard failure → field error on `amount`.
             return back()->withInput()->withErrors(['amount' => $e->getMessage()]);
         }
-
-        $refund = Refund::create([
-            ...$data,
-            'status' => Refund::STATUS_REQUESTED,
-            'requested_by' => Auth::id(),
-        ]);
-
-        AuditLogService::logModelChange($refund, 'refund_created', RefundService::MODULE);
 
         return redirect()->route('refunds.index')->with('success', 'Refund requested.');
     }
@@ -154,34 +134,19 @@ class RefundsController extends Controller
 
     public function update(RefundRequest $request, Refund $refund): RedirectResponse
     {
-        if (! $refund->canBeEdited()) {
-            return back()->with(
-                'error',
-                "Refund #{$refund->id} cannot be edited (status: {$refund->status})."
-            );
-        }
-
-        $data = $request->validated();
-
-        // Re-run the over-refund guards for the new amount, excluding
-        // this refund from the existing-sum so we don't double-count.
+        // R4 — RefundService::updateRequested is the single writer: it
+        // re-checks editability under a row lock, re-runs the over-refund
+        // guards, saves, and audits. The controller only translates
+        // failures into the two distinct UX responses below.
         try {
-            $this->service->assertRefundableAmount(
-                excludeRefundId: $refund->id,
-                collectionId: isset($data['collection_id']) ? (int) $data['collection_id'] : null,
-                proposedAmount: (float) $data['amount'],
-            );
-            $this->service->assertReturnRefundableAmount(
-                excludeRefundId: $refund->id,
-                orderReturnId: isset($data['order_return_id']) ? (int) $data['order_return_id'] : null,
-                proposedAmount: (float) $data['amount'],
-            );
+            $this->service->updateRequested($refund, $request->validated());
         } catch (InvalidArgumentException $e) {
+            // Over-refund guard failure → field error on `amount`.
             return back()->withInput()->withErrors(['amount' => $e->getMessage()]);
+        } catch (RuntimeException $e) {
+            // Not editable (approved / rejected / paid) → flash error.
+            return back()->with('error', $e->getMessage());
         }
-
-        $refund->fill($data)->save();
-        AuditLogService::logModelChange($refund, 'refund_updated', RefundService::MODULE);
 
         return redirect()->route('refunds.index')->with('success', 'Refund updated.');
     }
