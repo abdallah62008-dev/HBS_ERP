@@ -11,6 +11,7 @@ const REPORTS = [
     { title: 'Inventory', href: '/reports/inventory', desc: 'Per-product on-hand, reserved, available', perm: 'reports.inventory' },
     { title: 'Stock forecast', href: '/reports/stock-forecast', desc: 'Days-of-stock based on recent burn rate', perm: 'reports.inventory' },
     { title: 'Shipping performance', href: '/reports/shipping', desc: 'Delivery rate + return rate per carrier', perm: 'reports.shipping' },
+    { title: 'SLA performance', href: '/reports/sla', desc: 'Time-to-confirm / ship / deliver — p50, p95, on-time %', perm: 'reports.shipping' },
     { title: 'Collections', href: '/reports/collections', desc: 'Outstanding COD by status and carrier', perm: 'reports.cash_flow' },
     { title: 'Returns', href: '/reports/returns', desc: 'Returns by reason, refund totals', perm: 'reports.profit' },
     { title: 'Marketers', href: '/reports/marketers', desc: 'Per-marketer revenue, profit, return rate', perm: 'reports.marketers' },

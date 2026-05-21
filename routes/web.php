@@ -521,6 +521,7 @@ Route::middleware(['auth', 'active'])->group(function () {
         Route::middleware('permission:reports.inventory')->get('/inventory', [ReportsController::class, 'inventory'])->name('inventory');
         Route::middleware('permission:reports.inventory')->get('/stock-forecast', [ReportsController::class, 'stockForecast'])->name('stock-forecast');
         Route::middleware('permission:reports.shipping')->get('/shipping', [ReportsController::class, 'shipping'])->name('shipping');
+        Route::middleware('permission:reports.shipping')->get('/sla', [ReportsController::class, 'sla'])->name('sla');
         Route::middleware('permission:reports.cash_flow')->get('/collections', [ReportsController::class, 'collections'])->name('collections');
         Route::middleware('permission:reports.profit')->get('/returns', [ReportsController::class, 'returns'])->name('returns');
         Route::middleware('permission:reports.marketers')->get('/marketers', [ReportsController::class, 'marketers'])->name('marketers');

@@ -23,6 +23,18 @@ use Illuminate\Support\Facades\DB;
 class ReportsService
 {
     /**
+     * R16 — default fulfilment-SLA thresholds, in hours. Each key is
+     * operator-overridable without a redeploy via SettingsService —
+     * see ReportsController::sla() (`sla_confirm_hours`,
+     * `sla_ship_hours`, `sla_deliver_hours`).
+     */
+    public const SLA_DEFAULTS = [
+        'confirm_hours' => 24,    // order placed → Confirmed
+        'ship_hours' => 48,       // Confirmed    → Shipped
+        'deliver_hours' => 120,   // Shipped      → Delivered  (5 days)
+    ];
+
+    /**
      * @return array{from:string, to:string}
      */
     public function dateRange(?string $from, ?string $to): array
@@ -508,5 +520,177 @@ class ReportsService
             ],
             'net' => round($inflows - $totalOut, 2),
         ];
+    }
+
+    /**
+     * R16 — Fulfilment SLA report. For orders CREATED within the range,
+     * measures how fast each one moved through the three lifecycle
+     * milestones:
+     *
+     *   confirm : created_at   → confirmed_at
+     *   ship    : confirmed_at → shipped_at
+     *   deliver : shipped_at   → delivered_at
+     *
+     * Each stage reports p50 / p95 / average elapsed hours plus an
+     * on-time vs exceeded split against the supplied (or default)
+     * thresholds. Only orders that actually reached the later milestone
+     * count toward a stage — an order still in flight is excluded from
+     * that stage rather than skewing it to zero.
+     *
+     * Durations are computed in PHP from Unix timestamps (deliberately
+     * NOT via SQL TIMESTAMPDIFF) so the query behaves identically on
+     * MySQL (production) and SQLite (the test database).
+     *
+     * The `metrics` shape is intentionally reusable: the R15 dashboard's
+     * "fulfilment SLA" and "on-time-ship %" widgets read
+     * `metrics.{stage}.on_time_rate` straight from this method.
+     *
+     * @param  array{confirm_hours?:int|float, ship_hours?:int|float, deliver_hours?:int|float}|null  $thresholds
+     */
+    public function sla(?string $from, ?string $to, ?array $thresholds = null): array
+    {
+        ['from' => $from, 'to' => $to] = $this->dateRange($from, $to);
+        $fromTs = $from . ' 00:00:00';
+        $toTs = $to . ' 23:59:59';
+
+        $thresholds = [
+            'confirm_hours' => (float) ($thresholds['confirm_hours'] ?? self::SLA_DEFAULTS['confirm_hours']),
+            'ship_hours' => (float) ($thresholds['ship_hours'] ?? self::SLA_DEFAULTS['ship_hours']),
+            'deliver_hours' => (float) ($thresholds['deliver_hours'] ?? self::SLA_DEFAULTS['deliver_hours']),
+        ];
+
+        $confirmRows = Order::query()
+            ->whereBetween('created_at', [$fromTs, $toTs])
+            ->whereNotNull('confirmed_at')
+            ->get(['created_at', 'confirmed_at']);
+
+        $shipRows = Order::query()
+            ->whereBetween('created_at', [$fromTs, $toTs])
+            ->whereNotNull('confirmed_at')
+            ->whereNotNull('shipped_at')
+            ->get(['confirmed_at', 'shipped_at']);
+
+        $deliverRows = Order::query()
+            ->whereBetween('created_at', [$fromTs, $toTs])
+            ->whereNotNull('shipped_at')
+            ->whereNotNull('delivered_at')
+            ->get(['shipped_at', 'delivered_at']);
+
+        return [
+            'from' => $from,
+            'to' => $to,
+            'thresholds' => $thresholds,
+            'metrics' => [
+                'confirm' => $this->slaMetric(
+                    $this->slaDurations($confirmRows, 'created_at', 'confirmed_at'),
+                    $thresholds['confirm_hours'],
+                ),
+                'ship' => $this->slaMetric(
+                    $this->slaDurations($shipRows, 'confirmed_at', 'shipped_at'),
+                    $thresholds['ship_hours'],
+                ),
+                'deliver' => $this->slaMetric(
+                    $this->slaDurations($deliverRows, 'shipped_at', 'delivered_at'),
+                    $thresholds['deliver_hours'],
+                ),
+            ],
+        ];
+    }
+
+    /**
+     * Elapsed hours between two milestone columns for each row, sorted
+     * ascending. Negative spans (clock skew / bad data) are dropped.
+     *
+     * @param  iterable<int, \App\Models\Order>  $rows
+     * @return array<int, float>
+     */
+    private function slaDurations(iterable $rows, string $startCol, string $endCol): array
+    {
+        $hours = [];
+
+        foreach ($rows as $row) {
+            $start = $row->{$startCol};
+            $end = $row->{$endCol};
+            if ($start === null || $end === null) {
+                continue;
+            }
+            $elapsed = ($end->getTimestamp() - $start->getTimestamp()) / 3600;
+            if ($elapsed >= 0) {
+                $hours[] = $elapsed;
+            }
+        }
+
+        sort($hours);
+
+        return $hours;
+    }
+
+    /**
+     * Summarise one SLA stage: count, p50 / p95 / average elapsed hours,
+     * and the on-time vs exceeded split against $thresholdHours.
+     *
+     * @param  array<int, float>  $hours  pre-sorted ascending elapsed-hours sample
+     * @return array<string, mixed>
+     */
+    private function slaMetric(array $hours, float $thresholdHours): array
+    {
+        $count = count($hours);
+
+        if ($count === 0) {
+            return [
+                'count' => 0,
+                'p50_hours' => null,
+                'p95_hours' => null,
+                'avg_hours' => null,
+                'threshold_hours' => $thresholdHours,
+                'on_time' => 0,
+                'exceeded' => 0,
+                'on_time_rate' => null,
+            ];
+        }
+
+        $exceeded = 0;
+        foreach ($hours as $h) {
+            if ($h > $thresholdHours) {
+                $exceeded++;
+            }
+        }
+        $onTime = $count - $exceeded;
+
+        return [
+            'count' => $count,
+            'p50_hours' => round($this->percentile($hours, 50), 1),
+            'p95_hours' => round($this->percentile($hours, 95), 1),
+            'avg_hours' => round(array_sum($hours) / $count, 1),
+            'threshold_hours' => $thresholdHours,
+            'on_time' => $onTime,
+            'exceeded' => $exceeded,
+            'on_time_rate' => round(($onTime / $count) * 100, 1),
+        ];
+    }
+
+    /**
+     * Linear-interpolation percentile over a pre-sorted ascending array.
+     *
+     * @param  array<int, float>  $sorted
+     */
+    private function percentile(array $sorted, float $p): float
+    {
+        $n = count($sorted);
+        if ($n === 0) {
+            return 0.0;
+        }
+        if ($n === 1) {
+            return (float) $sorted[0];
+        }
+
+        $rank = ($p / 100) * ($n - 1);
+        $low = (int) floor($rank);
+        $high = (int) ceil($rank);
+        if ($low === $high) {
+            return (float) $sorted[$low];
+        }
+
+        return $sorted[$low] + ($rank - $low) * ($sorted[$high] - $sorted[$low]);
     }
 }

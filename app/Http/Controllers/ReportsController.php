@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\ReportsService;
+use App\Services\SettingsService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -57,6 +58,23 @@ class ReportsController extends Controller
     public function shipping(Request $request): Response
     {
         return Inertia::render('Reports/Shipping', $this->reports->shippingPerformance($request->from, $request->to));
+    }
+
+    /**
+     * R16 — Fulfilment SLA report. Thresholds default to
+     * ReportsService::SLA_DEFAULTS and are overridable per-key from
+     * operator settings (`sla_confirm_hours`, `sla_ship_hours`,
+     * `sla_deliver_hours`) without a redeploy.
+     */
+    public function sla(Request $request): Response
+    {
+        $thresholds = [
+            'confirm_hours' => SettingsService::get('sla_confirm_hours', ReportsService::SLA_DEFAULTS['confirm_hours']),
+            'ship_hours' => SettingsService::get('sla_ship_hours', ReportsService::SLA_DEFAULTS['ship_hours']),
+            'deliver_hours' => SettingsService::get('sla_deliver_hours', ReportsService::SLA_DEFAULTS['deliver_hours']),
+        ];
+
+        return Inertia::render('Reports/Sla', $this->reports->sla($request->from, $request->to, $thresholds));
     }
 
     public function collections(Request $request): Response
