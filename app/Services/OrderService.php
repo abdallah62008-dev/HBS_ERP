@@ -45,7 +45,14 @@ class OrderService
         private readonly MarketerWalletService $marketerWallet,
         private readonly ProfitGuardService $profitGuard,
         private readonly MarketerPricingResolver $marketerPricing,
+        private readonly SmartAlertsService $smartAlerts,
     ) {}
+
+    /**
+     * R1 — order statuses whose transition emits an in-app operator
+     * notification, broadcast to the order-agent / manager / admin roles.
+     */
+    private const NOTIFY_ON_STATUSES = ['Confirmed', 'Shipped', 'Delivered', 'Returned'];
 
     /**
      * Create a brand-new order from a validated payload. The payload may
@@ -221,7 +228,7 @@ class OrderService
 
         $oldStatus = $order->status;
 
-        return DB::transaction(function () use ($order, $oldStatus, $newStatus, $note) {
+        $updated = DB::transaction(function () use ($order, $oldStatus, $newStatus, $note) {
             $userId = Auth::id();
             $now = now();
 
@@ -260,6 +267,20 @@ class OrderService
 
             return $order->refresh();
         });
+
+        // R1 — emit an in-app operator notification AFTER the transaction
+        // commits, so a notification-write failure can never roll back an
+        // already-applied status change. It is a non-critical side-effect:
+        // any failure is reported, never surfaced to the caller.
+        if (in_array($newStatus, self::NOTIFY_ON_STATUSES, true)) {
+            try {
+                $this->smartAlerts->notifyOrderStatusChange($updated, $newStatus);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
+        return $updated;
     }
 
     /**

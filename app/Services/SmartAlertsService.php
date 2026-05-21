@@ -187,6 +187,27 @@ class SmartAlertsService
     }
 
     /**
+     * R1 — notify operator roles that an order reached a key lifecycle
+     * status (Confirmed / Shipped / Delivered / Returned). Called by
+     * OrderService::changeStatus after the transition commits.
+     *
+     * Broadcast to order-agent + manager + admin via the existing in-app
+     * notification system (the bell icon). Returns the number of
+     * notification rows created.
+     */
+    public function notifyOrderStatusChange(Order $order, string $newStatus): int
+    {
+        return $this->createForRoles(
+            roleSlugs: ['order-agent', 'manager', 'admin'],
+            type: 'Order Status',
+            title: "Order {$order->order_number} — {$newStatus}",
+            message: "Order {$order->order_number} for {$order->customer_name} is now {$newStatus}.",
+            actionUrl: "/orders/{$order->id}",
+            dedupKey: "order-status-{$order->id}-{$newStatus}",
+        );
+    }
+
+    /**
      * Insert one notification per role. Returns count actually created
      * (0 when deduped within DEDUP_WINDOW_HOURS).
      *

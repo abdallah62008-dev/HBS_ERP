@@ -13,7 +13,7 @@ class Notification extends Model
     public const TYPES = [
         'Low Stock', 'Delayed Shipment', 'High Risk Customer',
         'Unprofitable Campaign', 'Pending Collection', 'Approval Needed',
-        'Backup Failed', 'New Order', 'Profit Guard Block',
+        'Backup Failed', 'New Order', 'Profit Guard Block', 'Order Status',
     ];
 
     protected $fillable = [
