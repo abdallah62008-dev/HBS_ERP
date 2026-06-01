@@ -103,9 +103,11 @@ class DashboardWidgetsTest extends TestCase
 
     public function test_sla_widget_reflects_reports_service_output(): void
     {
-        // One order created this month, confirmed 5h later — proves the
+        // One order created TODAY, confirmed 5h later — proves the
         // dashboard genuinely runs ReportsService::sla() over live data.
-        $base = CarbonImmutable::today()->startOfMonth()->addDays(1)->setTime(8, 0);
+        // (Anchored to today, not startOfMonth+1, so the cohort window
+        // [monthStart..today] always covers the fixture even on day 1.)
+        $base = CarbonImmutable::today()->setTime(8, 0);
         $order = $this->placeOrder();
         $order->forceFill([
             'created_at' => $base,
