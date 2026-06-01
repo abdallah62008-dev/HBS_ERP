@@ -33,6 +33,7 @@ use App\Http\Controllers\OrdersController;
 use App\Http\Controllers\OrdersExportController;
 use App\Http\Controllers\ProductsController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\PublicTrackingController;
 use App\Http\Controllers\PurchaseInvoicesController;
 use App\Http\Controllers\ReportsController;
 use App\Http\Controllers\ReturnReasonsController;
@@ -61,6 +62,16 @@ Route::get('/', function () {
 
     return redirect()->route('login');
 });
+
+// R3 — Public order tracking via signed URL. No auth required; the
+// route is locked down by Laravel's `signed` middleware so a tampered
+// or unsigned URL returns 403. The controller emits only customer-safe
+// fields (no profit / cost / marketer / phone / address / internal
+// notes / item pricing).
+Route::get('/track/{orderNumber}', PublicTrackingController::class)
+    ->where('orderNumber', '[A-Za-z0-9\-]+')
+    ->middleware('signed')
+    ->name('public.track');
 
 /*
 |--------------------------------------------------------------------------
