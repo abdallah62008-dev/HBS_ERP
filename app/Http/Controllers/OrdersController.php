@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\ApprovalRequiredException;
 use App\Http\Requests\StoreOrderRequest;
 use App\Http\Requests\UpdateOrderRequest;
 use App\Models\Category;
@@ -972,6 +973,116 @@ class OrdersController extends Controller
         }
 
         return back()->with('success', "Status changed to {$data['status']}.");
+    }
+
+    /**
+     * R17 — Bulk status transition.
+     *
+     * Each selected order is processed individually through
+     * OrderService::changeStatus so EVERY per-order gate still fires:
+     *   - R-11 transition DAG (illegal jumps rejected per-order)
+     *   - R6 approval gate (high-value / high-discount → request)
+     *   - shipping checklist (→ Shipped)
+     *   - inventory hooks (reserve / release / ship)
+     *   - status_history + audit_logs
+     *   - R1 in-app notifications
+     *
+     * Best-effort batch: a single per-order failure NEVER aborts the
+     * rest. Outcomes are tallied (succeeded / skipped_same_status /
+     * approval_requested / failed) and surfaced via flash. Detailed
+     * per-order failures land in `bulk_failures` session for the UI.
+     *
+     * Bulk → Returned is rejected: each return needs its own reason /
+     * condition / refund_amount payload, which doesn't fit a bulk
+     * shape. Operators use the single-order Returned flow.
+     */
+    public function bulkChangeStatus(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'order_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'order_ids.*' => [
+                'integer',
+                Rule::exists('orders', 'id')->whereNull('deleted_at'),
+            ],
+            'status' => ['required', Rule::in(Order::STATUSES)],
+            'note' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        if ($data['status'] === 'Returned') {
+            return back()->with(
+                'error',
+                'Bulk → Returned is not supported. Each return needs its own reason / condition — use the single-order Returned flow.'
+            );
+        }
+
+        $orders = Order::query()->whereIn('id', $data['order_ids'])->get();
+
+        $succeeded = 0;
+        $skipped = 0;
+        $approvalRequested = 0;
+        $failed = 0;
+        $failures = [];
+
+        foreach ($orders as $order) {
+            // Per-order ownership gate (marketers see only their own
+            // orders). authorizeOwnership aborts on a foreign order;
+            // catch & report rather than 403-ing the whole batch.
+            try {
+                $this->authorizeOwnership($order);
+            } catch (\Throwable $e) {
+                $failed++;
+                $failures[] = [
+                    'order_id' => $order->id,
+                    'order_number' => $order->order_number,
+                    'reason' => 'Permission denied',
+                ];
+                continue;
+            }
+
+            if ($order->status === $data['status']) {
+                $skipped++;
+                continue;
+            }
+
+            try {
+                $this->orderService->changeStatus($order, $data['status'], $data['note'] ?? null);
+                $succeeded++;
+            } catch (ApprovalRequiredException $e) {
+                // R6 — approval request created; status NOT changed.
+                $approvalRequested++;
+                $failures[] = [
+                    'order_id' => $order->id,
+                    'order_number' => $order->order_number,
+                    'reason' => 'Approval requested (#' . $e->approvalRequestId . ')',
+                ];
+            } catch (InvalidArgumentException | RuntimeException $e) {
+                // R-11 DAG, shipping checklist, inventory, or any other
+                // service-layer rule failure for this single order.
+                $failed++;
+                $failures[] = [
+                    'order_id' => $order->id,
+                    'order_number' => $order->order_number,
+                    'reason' => $e->getMessage(),
+                ];
+            }
+        }
+
+        $summary = sprintf(
+            '%d ok · %d already %s · %d need approval · %d failed.',
+            $succeeded,
+            $skipped,
+            $data['status'],
+            $approvalRequested,
+            $failed,
+        );
+
+        $allClean = $failed === 0 && $approvalRequested === 0;
+        $response = back()->with($allClean ? 'success' : 'error', $summary);
+        if (! empty($failures)) {
+            $response = $response->with('bulk_failures', $failures);
+        }
+
+        return $response;
     }
 
     public function timeline(Order $order): Response

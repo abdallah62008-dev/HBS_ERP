@@ -214,6 +214,11 @@ Route::middleware(['auth', 'active'])->group(function () {
         ->name('orders.edit');
     Route::middleware(['permission:orders.edit', 'fiscal_year_lock'])->put('/orders/{order}', [OrdersController::class, 'update'])
         ->name('orders.update');
+    // R17 — bulk status transition. MUST come before /orders/{order}/status
+    // so Laravel's matcher doesn't try {order}=bulk against the single-order
+    // change-status route.
+    Route::middleware(['permission:orders.change_status', 'fiscal_year_lock'])->post('/orders/bulk/status', [OrdersController::class, 'bulkChangeStatus'])
+        ->name('orders.bulk-change-status');
     Route::middleware(['permission:orders.change_status', 'fiscal_year_lock'])->post('/orders/{order}/status', [OrdersController::class, 'changeStatus'])
         ->name('orders.change-status');
     Route::middleware(['permission:orders.delete', 'fiscal_year_lock'])->delete('/orders/{order}', [OrdersController::class, 'destroy'])
