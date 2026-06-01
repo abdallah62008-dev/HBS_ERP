@@ -21,6 +21,7 @@ class ApprovalRequest extends Model
         'Pay Marketer',
         'Edit Approved Purchase Invoice',
         'Edit Closed Fiscal Year Record',
+        'High-Value Order Confirmation',
     ];
 
     protected $fillable = [

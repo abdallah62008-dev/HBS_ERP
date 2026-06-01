@@ -2,7 +2,9 @@
 
 namespace App\Services;
 
+use App\Exceptions\ApprovalRequiredException;
 use App\Exceptions\IllegalOrderTransitionException;
+use App\Models\ApprovalRequest;
 use App\Models\Customer;
 use App\Models\FiscalYear;
 use App\Models\Marketer;
@@ -46,6 +48,7 @@ class OrderService
         private readonly ProfitGuardService $profitGuard,
         private readonly MarketerPricingResolver $marketerPricing,
         private readonly SmartAlertsService $smartAlerts,
+        private readonly ApprovalService $approval,
     ) {}
 
     /**
@@ -193,8 +196,12 @@ class OrderService
      * checklist (ShippingChecklistService). Phase 5 wires marketer
      * wallet accrual into the Delivered transition.
      */
-    public function changeStatus(Order $order, string $newStatus, ?string $note = null): Order
-    {
+    public function changeStatus(
+        Order $order,
+        string $newStatus,
+        ?string $note = null,
+        bool $bypassApprovalGate = false,
+    ): Order {
         if (! in_array($newStatus, Order::STATUSES, true)) {
             throw new RuntimeException("Unknown order status: {$newStatus}");
         }
@@ -210,6 +217,42 @@ class OrderService
         // edges stay co-located.
         if (! Order::isLegalTransition($order->status, $newStatus)) {
             throw IllegalOrderTransitionException::from($order, $newStatus);
+        }
+
+        // R6 — Approval gate for high-value / high-discount Confirmed
+        // transitions. The handler that actually confirms an approved
+        // order calls this method with bypassApprovalGate=true so the
+        // approval can apply its own decision.
+        if ($newStatus === 'Confirmed' && ! $bypassApprovalGate) {
+            $context = $this->evaluateConfirmationApproval($order);
+            if ($context !== null) {
+                $existing = ApprovalRequest::query()
+                    ->where('approval_type', 'High-Value Order Confirmation')
+                    ->where('related_type', Order::class)
+                    ->where('related_id', $order->id)
+                    ->where('status', 'Pending')
+                    ->first();
+
+                if ($existing) {
+                    throw new ApprovalRequiredException(
+                        message: "Approval already pending for order {$order->order_number} (request #{$existing->id}).",
+                        approvalRequestId: $existing->id,
+                    );
+                }
+
+                $req = $this->approval->request(
+                    type: 'High-Value Order Confirmation',
+                    target: $order,
+                    oldValues: ['status' => $order->status],
+                    newValues: ['status' => 'Confirmed'],
+                    reason: $context['reason'],
+                );
+
+                throw new ApprovalRequiredException(
+                    message: "Order {$order->order_number} requires approval before confirmation — request #{$req->id} created.",
+                    approvalRequestId: $req->id,
+                );
+            }
         }
 
         // Shipping checklist gate. Throws if any blocking rule fails;
@@ -353,6 +396,57 @@ class OrderService
             // legitimising action). The single source of truth for return-
             // related inventory movements is now `ReturnService::inspect()`.
         }
+    }
+
+    /**
+     * R6 — does this order require approval before it can confirm?
+     *
+     * Returns null when neither threshold is exceeded (no approval
+     * needed). Otherwise returns a context array with a human-readable
+     * `reason` used to seed the approval request and the offending
+     * numbers. Thresholds are read from SettingsService with the R6
+     * defaults as fallback:
+     *   - order_approval_high_value_threshold   (default 10000)
+     *   - order_approval_high_discount_percent  (default 10)
+     *
+     * "Non-standard shipping" is deferred — the orders table has no
+     * shipping_method / shipping_type column to distinguish standard
+     * from non-standard, and inventing one is out of R6 scope.
+     *
+     * @return array{reason:string, high_value_total:?float, high_discount_percent:?float}|null
+     */
+    private function evaluateConfirmationApproval(Order $order): ?array
+    {
+        $valueThreshold = (float) SettingsService::get('order_approval_high_value_threshold', 10000);
+        $discountThreshold = (float) SettingsService::get('order_approval_high_discount_percent', 10);
+
+        $total = (float) $order->total_amount;
+        $subtotal = (float) $order->subtotal;
+        $headerDiscount = (float) $order->discount_amount;
+        $discountPct = $subtotal > 0 ? ($headerDiscount / $subtotal) * 100 : 0.0;
+
+        $reasons = [];
+        $highValue = null;
+        $highDiscount = null;
+
+        if ($total >= $valueThreshold) {
+            $reasons[] = sprintf('total %.2f >= threshold %.2f', $total, $valueThreshold);
+            $highValue = $total;
+        }
+        if ($discountPct >= $discountThreshold) {
+            $reasons[] = sprintf('discount %.1f%% >= threshold %.1f%%', $discountPct, $discountThreshold);
+            $highDiscount = round($discountPct, 1);
+        }
+
+        if (empty($reasons)) {
+            return null;
+        }
+
+        return [
+            'reason' => 'Confirmation requires approval — ' . implode(' and ', $reasons),
+            'high_value_total' => $highValue,
+            'high_discount_percent' => $highDiscount,
+        ];
     }
 
     /* ───────── helpers ───────── */

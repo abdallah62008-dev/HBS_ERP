@@ -39,6 +39,7 @@ class ApprovalService
         'Delete Order' => 'executeDeleteOrder',
         'Edit Confirmed Order Price' => 'executeEditConfirmedOrderPrice',
         'Pay Marketer' => 'executePayMarketer',
+        'High-Value Order Confirmation' => 'executeHighValueOrderConfirmation',
     ];
 
     /**
@@ -179,6 +180,28 @@ class ApprovalService
             Order::class, $order->id,
             oldValues: $req->old_values_json,
             newValues: $allowed,
+        );
+    }
+
+    /**
+     * R6 — confirm a high-value or high-discount order on behalf of the
+     * approver. Goes through OrderService::changeStatus with the
+     * approval gate bypassed so DAG / inventory reservation / status
+     * history / audit log / R1 notification all fire normally — the
+     * approval is just replacing the *human gate*, not the side-effects.
+     */
+    private function executeHighValueOrderConfirmation(ApprovalRequest $req): void
+    {
+        $order = Order::find($req->related_id);
+        if (! $order) {
+            throw new RuntimeException('Order not found.');
+        }
+
+        app(OrderService::class)->changeStatus(
+            $order,
+            'Confirmed',
+            note: 'Confirmed via approval #' . $req->id,
+            bypassApprovalGate: true,
         );
     }
 
